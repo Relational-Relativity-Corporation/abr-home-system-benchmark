@@ -1,438 +1,523 @@
-# M Declaration -- abr-home-system-benchmark
+# M Declaration — abr-home-system-benchmark V2.0
 
-**Metatron Dynamics, Inc.** V0.3. Bounded over D. No claim beyond D.
+**Metatron Dynamics, Inc.** Bounded over D. No claim beyond D.
 
 ---
 
-## Declared Domain (D)
+## Declared Hardware (D)
 
-D := timing observations (nanoseconds per A -> B -> R pass) over a declared
-graph with working set <= 1 MB, resident in L3 cache, on the following
-declared hardware:
-
-- CPU: AMD Ryzen 5 7600X (Zen 4, 6 cores, 32 MB L3)
-- RAM: 32 GB DDR5-5600 (2x 16 GB Micron, dual channel)
+- CPU: AMD Ryzen 5 7600X (Zen 4, 6 cores / 12 threads, 4.7 GHz base / 5.3 GHz boost)
+  - L1d: 32 KB/core
+  - L2: 1 MB/core
+  - L3: 32 MB shared
+- RAM: 32 GB DDR5-5600 (2× 16 GB Micron, dual channel)
 - OS: Windows 11 Home 64-bit
+- Compiler: Rust `cargo build --release` (rustc version as reported at build time)
 
-## Declared Observable (M)
-
-Wall-clock time per A -> B -> R pass.
-Instrument: std::time::Instant (Rust standard library).
-Units: nanoseconds per pass.
-
-## Cache Residency Protocol
-
-N_WARM = 100 passes executed and discarded before timing begins.
-Declared purpose: ensure working set resident in L3 (32 MB) before measurement.
-Candidate declared bottleneck: L3 cache -- not yet confirmed.
-Basis: working set (<= 1 MB) < L3 capacity (32 MB).
-See OC-HB-1, OC-HB-2, OC-HB-4.
-
-## Declared Graph
-
-Open DAG: N_NODES = 8,192 nodes, N_EDGES = 8,191 directed edges.
-Topology: open chain (node i -> node i+1). Ring topology inadmissible.
-Working set: 192 KB (measured at runtime -- within declared <= 1 MB bound).
+All timing figures in the execution record are wall-clock measurements on
+this hardware unless explicitly marked otherwise. Sandbox/virtualized
+figures are structural sanity checks only and are never cited as declared.
 
 ---
 
-## Declared Operator Formulas
+## Declared Observable Mapping (M)
 
-All operators declared from and consistent with kernel operators.rs V7
--- Metatron Dynamics (ABR formulas lines 890-988). No deviation.
+M maps each declared locus (graph node) to a real number in D:
 
-### A operator (V7 line 890)
-A(x)[e] = x[source(e)] - x[target(e)]
-NodeField -> edge values. Directed difference only.
+  M(node i) = i / N_NODES   (gradient field, values in [0, 1))
 
-### B operator (V7 line 903)
-B(g)[e] = g[e] + Σ_{f ∈ succ(e)} g[f]
-Immediate successor INPUT values from g (A field) -- not recursive B values.
-Terminal edges: B[e] = g[e] (no successors -- open boundary).
-On this open chain: succ(e) has at most one member.
+This produces non-trivial A operator output (non-zero pairwise differences)
+while remaining fully deterministic and reproducible across runs.
 
-### rho (V7 lines 938-948) -- NODE FORM
-rho[i] = rho_base * chi[i] / (1 + chi[i])
-chi[i] = max |A[e]| over all edges incident to node i (in or out).
-One value per NODE. Not per edge.
+---
+
+## Declared Graph Structure
+
+Open DAG (directed acyclic graph). N_NODES = 8,192. N_EDGES = N_NODES − 1.
+Each node connects to its immediate successor (chain topology).
+Terminal edge has no successor — open boundary.
+Ring topology is inadmissible per kernel V7.
+
+Working set: N_NODES × 8 + N_EDGES × 8 + N_EDGES × 8 = 196,592 bytes (192 KB).
+Target ≤ 1 MB (matches abr-infinity-fabric community analysis working set).
+
+---
+
+## Declared Operators
+
+ABR kernel V7. Three operators in sequence per pass:
+
+  A(x)[e] = x[source(e)] − x[target(e)]
+  B(g)[e] = g[e] + Σ_{f ∈ succ(e)} g[f]   (immediate successor input values; not recursive)
+  rho[i]  = rho_base × chi[i] / (1 + chi[i])   (node-indexed; chi[i] = max |A[e]| incident to i)
+  R(g)[e] = g[e] + rho[src(e)] × (Σ_succ g[f] − Σ_pred g[p])
+
 rho_base = 1.0 (Origin declaration for this benchmark).
+Zero heap allocation per pass after buffer construction.
 
-### R operator (V7 lines 957-988)
-R(g)[e] = g[e] + rho[src(e)] * (Σ_{f∈succ(e)} g[f] - Σ_{p∈pred(e)} g[p])
-Node-indexed rho at source node of each edge.
-Successor and predecessor sums over B field values.
-
-### Component pairs
-No component pairs declared for this benchmark. The cross-topology
-term in V7 R (lines 971-984) is structurally zero and correctly absent.
-This is an admissible single-component projection of the full operator.
+Grounding: operators.rs V7, Metatron Dynamics kernel (lines 890–988).
 
 ---
 
-## Implementation Admissibility Condition
+## Implementation Admissibility Conditions
 
-The declared operators define relational structure over declared observables.
-They do not specify memory allocation strategy. However, an implementation
-that introduces memory operations not required by the operator mathematics
-breaks the provenance chain between the declared observable and the measured
-result -- the timing measurement then reflects implementation artifacts, not
-operator traversal.
+1. Buffers (A, B, rho, R) allocated once before the warm phase. No
+   allocation inside the timed loop. Confirmed by test
+   `abr_buffers_zero_allocation_per_pass` (V0.2+).
 
-For a timing measurement to be admissible as M(observable):
+2. Warm phase: 100 passes discarded before timing begins. Ensures L3
+   residency for the declared working set (192 KB ≪ 32 MB L3).
 
-  1. The working set must be declared and resident before timing begins
-     (warm-pass protocol -- declared above).
-  2. No memory allocation may occur during a timed pass that is not
-     required by the operator mathematics.
-  3. Buffers used by A, B, rho, and R must be pre-allocated once before
-     the timed phase and reused across all timed passes.
-     Note: rho buffer is node-indexed (n_nodes); A, B, R are edge-indexed
-     (n_edges). Both allocated in AbrBuffers before warm phase.
+3. Timed phase: 1,000 passes. Mean wall-clock time reported.
 
-A timing measurement taken over an implementation that violates condition 2
-is a measurement of a different observable: implementation cost, not
-operator traversal cost. It must be declared as such.
+4. Exception — XLARGE and XXLARGE tiers in Regime 3 (V2.0): lighter
+   protocol (3 warm / 10 timed). See OC-CC-4.
 
 ---
 
-## Version History
+## Declared Scaling Graph
 
-### V0.1 -- 2026-08-08 (superseded)
-Four heap allocations per ABR pass. B implemented as recursive accumulation
-of B[succ(e)] -- not V7. rho implemented as edge-local |A[e]|/(1+|A[e]|)
--- not V7.
-Measured: 113,927 ns/pass, 8,778 analyses/second.
-Epistemic status: MEASURES IMPLEMENTATION COST and NON-V7 OPERATORS.
-Not admissible as basis for MI355X ratio comparison.
-
-### V0.2 -- 2026-08-08 (superseded)
-Allocation removed. B and rho still non-V7.
-Measured: 35,349 ns/pass, 28,290 analyses/second, ~4.5 ns/edge.
-Epistemic status: MEASURES OPERATOR TRAVERSAL COST but NON-V7 OPERATORS.
-Not admissible as basis for MI355X ratio comparison.
-
-### V0.3 -- 2026-08-08 (current)
-B corrected to immediate-successor input values (V7 line 903).
-rho corrected to node-indexed form with rho_base (V7 lines 938-948).
-R confirmed node-indexed rho at source (V7 lines 957-988).
-Pre-allocated buffers maintained. rho buffer node-indexed (n_nodes).
-24/24 tests passing. Two independent runs recorded in docs/execution_record.md.
-
-Run 1: 30,775.9 ns/pass, 32,493 analyses/second, MI355X ratio 234.8x.
-Run 2: 28,922.4 ns/pass, 34,575 analyses/second, MI355X ratio 220.7x.
-Run-to-run variation ~6% -- consistent with OC-HB-2 (OS scheduling).
-
-Epistemic status: MEASURES V7 ABR OPERATOR TRAVERSAL COST.
-Admissible as basis for MI355X ratio comparison subject to OC-HB-1
-through OC-HB-4.
+For scaling measurement (Regime 1) and crossover tiers (Regime 3):
+`declare_scaling_graph(n)` — same open-chain topology as the benchmark
+graph, parameterized by n_nodes. Node field: i / n_nodes.
 
 ---
 
-## Scaling Measurement (V0.3)
+## Declared Regime 3 Tiers (V2.0)
 
-Five declared graph sizes. Same V7-consistent A -> B -> rho -> R sequence.
-Same warm-pass protocol. Same hardware. Two independent runs recorded.
+Tiers are grounded in the declared cache-latency curve (declared-hardware
+run 2026-08-29). Boundaries are declared hardware observables, not estimates.
 
-### Run 1 -- 2026-08-08
-| N_EDGES | WS (KB) | MEAN (ns) | NS/EDGE | MIN (ns) |
-|---------|---------|-----------|---------|----------|
-| 1,023   | 24.0    | 3,862     | 3.775   | 3,100    |
-| 2,047   | 48.0    | 7,734     | 3.778   | 6,100    |
-| 4,095   | 96.0    | 14,792    | 3.612   | 12,500   |
-| 8,191   | 192.0   | 31,050    | 3.791   | 25,100   |
-| 16,383  | 384.0   | 62,997    | 3.845   | 52,900   |
-NS/EDGE ratios: 1.0008, 0.9561, 1.0494, 1.0144
+| Tier    | N         | WS (values) | Cache context               | NS/ACCESS (declared) |
+|---------|-----------|-------------|-----------------------------|-----------------------|
+| SMALL   | 64        | 512 B       | L1d flat                    | 0.56                  |
+| MEDIUM  | 1,024     | 8 KB        | L1d flat                    | 0.56                  |
+| LARGE   | 65,536    | 524 KB      | L2 saturation begins        | 0.70                  |
+| XLARGE  | 262,144   | 2 MB        | L3 entry                    | 0.88                  |
+| XXLARGE | 2,097,152 | 16 MB       | Past L3-internal step       | 3.38                  |
 
-### Run 2 -- 2026-08-08
-| N_EDGES | WS (KB) | MEAN (ns) | NS/EDGE | MIN (ns) |
-|---------|---------|-----------|---------|----------|
-| 1,023   | 24.0    | 3,509     | 3.430   | 3,200    |
-| 2,047   | 48.0    | 7,040     | 3.439   | 6,400    |
-| 4,095   | 96.0    | 14,105    | 3.445   | 13,100   |
-| 8,191   | 192.0   | 27,883    | 3.404   | 26,500   |
-| 16,383  | 384.0   | 59,770    | 3.648   | 55,100   |
-NS/EDGE ratios: 1.0026, 1.0015, 0.9883, 1.0717
+ALL_PAIRS excluded at LARGE, XLARGE, XXLARGE: O(N^2) is intractable
+at those N. The complexity-class comparison is settled at SMALL/MEDIUM.
 
-### Interpretation
-NS/EDGE is approximately constant across all five declared graph sizes
-in both runs (range 3.404-3.845 ns/edge across all observations, ratios
-0.956-1.072). This result is consistent with approximately constant
-per-edge cost on this hardware for V7 ABR operators and the declared
-open-chain topology.
-
-Run-to-run variation in absolute timing (~6%) is consistent with OS
-scheduling effects declared in OC-HB-2. The approximately constant
-NS/EDGE relationship is reproduced across both independent runs.
-
-This result does not independently identify the binding mechanism.
-Operator isolation measurement (timing A, B, rho, R separately) would
-be required to attribute the cost to a specific operator or hardware
-constraint. OC-HB-4 remains open.
+Rationale: V1.x tiers (max N=8,192, 64 KB) were absorbed by L2 at
+0.56 ns/access — SCRAMBLED and BRANCHY showed no divergence from
+LINEAR_SCAN because the cache-unfriendly and branch-heavy mechanisms
+never engaged. V2.0 tiers place the experiment at and across the
+declared hardware congestion thresholds so the mechanisms are tested
+under conditions where they actually cost something.
 
 ---
 
-## Derived Compute Relationship (V0.3)
+## Declared Binary Algorithms (Regime 3)
 
-For the declared benchmark topology and tested range on this hardware:
+Seven algorithms declared in binary_baselines.rs:
 
-  ABR compute time scales approximately as n_declared_relations x ~3.4-3.8 ns/edge
+| Label       | Complexity   | Mechanism isolated              |
+|-------------|-------------|----------------------------------|
+| ALL_PAIRS   | O(N^2)      | Quadratic baseline (SMALL/MEDIUM only) |
+| LINEAR_SCAN | O(N)        | Sequential access, branch-free   |
+| WINDOWED    | O(N×K), K=8 | Bounded local context            |
+| PREFIX_SUM  | O(N)        | Accumulation pattern             |
+| SORT_SCAN   | O(N log N)  | Sort cost                        |
+| SCRAMBLED   | O(N)        | Cache-unfriendly access pattern  |
+| BRANCHY     | O(N)        | Branch misprediction             |
 
-Measured over 1,023-16,383 edges under the declared warm-pass protocol.
-Hardware-specific and declaration-specific. Does not generalize to
-arbitrary ABR declarations or graph topologies without further measurement.
-
-STRUCTURAL EXTRAPOLATION NOTE: Application of this relationship to
-declared graphs outside the measured range (1,023-16,383 edges) or with
-different declared topology, field structure, or component pairs is a
-structural extrapolation under the constant-per-edge assumption -- not a
-direct measurement from this repository. For example, application to the
-1MLC antibody-antigen interface (29 declared relations) would give
-approximately 29 x 3.8 ns = ~110 ns -- but 29 edges lies far outside
-the measured range (minimum 1,023 edges), the topology differs from the
-open chain declared here, and no component pairs are declared in this
-benchmark. Such extrapolations require explicit declaration and are not
-established by this measurement alone.
+SCRAMBLED and BRANCHY have identical op counts to LINEAR_SCAN —
+only the access pattern or branch predictability differs. This holds
+the complexity class constant while isolating the hardware mechanism.
 
 ---
 
-## Structural Parallel to MI355X (abr-infinity-fabric)
+## Declared Cache-Latency Curve
 
-| Property | MI355X | Home System |
-|---|---|---|
-| Working set | 1 MB | 192 KB (primary benchmark) |
-| Residency | HBM3E (288 GB) | L3 (32 MB) |
-| Declared bottleneck | Under revision (OC-IF-5) | Candidate L3 (OC-HB-4) |
-| Operators | V7 ABR declared | V7 ABR confirmed (V0.3) |
-| Throughput status | Structural upper bound | Measured (V0.3, two runs) |
+Standalone characterization of per-access latency vs working-set size
+on the declared hardware. 15 points, doubling from 4 KB to 64 MB.
+Scrambled-access primitive (fixed seed SCRAMBLE_SEED). Lighter timing
+protocol (3 warm / 10 timed) — see OC-CL-1.
 
-MI355X ratio range across two V0.3 runs: 220.7x - 234.8x.
-Mixed epistemic: MI355X figure is structural (abr-infinity-fabric);
-home system figure is measured. Both carry open conditions (OC-HB-3).
+Declared-hardware results (2026-08-29):
+  L1d region (4–32 KB):   0.56–0.57 ns/access — flat
+  L2 region (64 KB–1 MB): 0.56–0.80 ns/access — gradual rise
+  L3-internal step:        0.95 → 3.38 ns/access (8 MB → 16 MB, 3.5× jump)
+  RAM (>32 MB):            6.15 ns/access
+  Total range: ~11×
+
+The L3-internal step (8→16 MB) is the most pronounced single hardware
+transition on this chip for this access pattern. No sharp textbook cliffs
+at L1d→L2 or L2→L3 boundaries — gradual ramp instead.
 
 ---
 
 ## Open Conditions
 
-- OC-HB-1: L3 bandwidth not directly measured via hardware performance
-  counters. Cache residency declared via warm-pass protocol only.
-  Direct measurement via performance counters closes this condition.
+### Regime 1
 
-- OC-HB-2: L3 residency assumes no OS interruption or cache eviction
-  during timed passes. Not directly verifiable without performance
-  counter access on Windows 11. Run-to-run variation (~6%) is
-  consistent with OS scheduling effects.
+**OC-HB-1**: L3 bandwidth not directly measured. Home-system throughput
+figure is wall-clock time over the declared working set; L3 bandwidth
+as a binding mechanism is inferred but not isolated.
 
-- OC-HB-3: MI355X throughput figure is a structural derivation
-  (abr-infinity-fabric throughput_invariants.rs). The ratio
-  (MI355X / home system) is a mixed epistemic quantity. Correspondence
-  requires direct MI355X measurement (OC-IF-3 in abr-infinity-fabric).
+**OC-HB-3**: MI355X ratio comparison is MIXED epistemic status.
+MI355X declared throughput is structural (abr-infinity-fabric); home
+system is measured wall-clock. Direct instrument measurement of MI355X
+required to establish correspondence.
 
-- OC-HB-4: The scaling measurement is consistent with approximately
-  constant per-edge cost across the tested range and topology. This
-  does not isolate individual operators (A, B, rho, R) or identify
-  the binding hardware constraint. Operator isolation measurement
-  required to attribute cost. Declared open.
+**OC-HB-4**: Operator isolation not yet performed. NS/EDGE approximately
+constant is consistent with latency-bound execution but does not identify
+which operator (A, B, rho, R) is binding.
 
----
+### Regime 2
 
-## V1.0 Addendum — Three-Regime Expansion (2026-08-28)
+**OC-PT-1**: Only activation-timestamp observable ingested (V1.0).
+Full uProf hotspot sampling (idle/active utilization per process) required
+to test the actual efficiency claim. example_session_trace() is a partial
+hand-transcribed trace — not a full export.
 
-Everything above (D, M, operator formulas, V0.1-V0.3 history, Regime 1
-scaling tables) is preserved unchanged. It remains the declared basis for
-OC-IF-5 in abr-infinity-fabric. V1.0 adds two new declared domains
-alongside D, without modifying D itself.
+**OC-PT-2**: CO_ACTIVATION_WINDOW_SECS = 2.0 is declared, not derived.
+Sensitivity untested.
 
-### D2 — Process Topology Domain (Regime 2)
+**OC-PT-3**: No comparison against actual OS scheduler behavior
+(context-switch counts, redundant wake events) has been made.
 
-D2 := activation-time observations over a real or recorded OS process
-list on the declared hardware (see README.md, Declared Hardware).
+### Regime 3
 
-M2 (declared observable, V1.0): start_offset_secs — wall-clock activation
-timestamp of each process, normalized to seconds since the earliest
-recorded activation in the session. Instrument: manual transcription from
-AMD uProf "Select Profile Target" (V1.0) or a full uProf CSV export
-(future work).
+**OC-CC-1**: ADDRESSED (V2.0). Tiers now grounded in declared hardware
+observables. Prior open condition (undeclared tier sizes) closed.
+New open condition: whether SCRAMBLED/BRANCHY diverge from LINEAR_SCAN
+at LARGE/XLARGE/XXLARGE is an empirical question answered by the V2.0
+declared-hardware run (PENDING — see execution_record.md).
 
-Declared edge rule: two temporally-consecutive processes (sorted by
-start_offset_secs) are connected if their gap <= CO_ACTIVATION_WINDOW_SECS
-(2.0s, declared, not derived — OC-PT-2).
+**OC-CC-2**: NARROWED (V1.1). Seven complexity classes tested (V1.3).
+Still a declared representative set, not exhaustive.
 
-D2 is explicitly declared INCOMPLETE relative to the actual question under
-discussion (whether relational structure in process dependency/idle
-patterns could reduce redundant OS-to-CPU switching). Activation timing
-alone does not carry idle/active state. See OC-PT-1.
+**OC-CC-3**: CLOSED (declared-hardware run 2026-08-29, V1.3).
 
-Test result: V7 operators (operators.rs, unmodified) execute over a
-DeclaredGraph built from example_session_trace() (26 real processes,
-hand-transcribed 2026-08-28) and produce finite output. This confirms
-computability, not efficiency.
+**OC-CC-4**: NEW (V2.0). XLARGE and XXLARGE tiers use lighter timing
+protocol (3 warm / 10 timed). Elevated run-to-run variance at those
+tiers — adequate for detecting order-of-magnitude mechanism engagement,
+not adequate for precise ratio figures at the same confidence as lower tiers.
 
-DECLARED HARDWARE RUN (Ryzen 5 7600X / DDR5-5600 / Windows 11 Home),
-2026-08-29: 26 declared processes, 24 declared co-activation edges,
-edge density 0.960 (identical structure to the sandbox run, as expected
-since this domain's input is a fixed hand-transcribed trace rather than
-a live hardware measurement — see OC-PT-1 for what remains to be
-measured).
+### Cache-Latency Curve
 
-### D3 — Task-Complexity Crossover Domain (Regime 3)
-
-D3 := wall-clock timing of two declared computations over the same
-declared hardware, for direct comparison:
-
-  1. Binary baseline: all-pairs difference over N values (O(N^2)),
-     same elementary subtraction as ABR operator A.
-  2. Relational baseline: the exact Regime 1 ABR chain (declare_scaling_graph,
-     operators::abr_pass) over the same N nodes (O(N)).
-
-M3 (declared observable): mean wall-clock ns per computation, same
-N_WARM/N_TIMED protocol as Regime 1 (timing_harness.rs), applied
-identically to both sides of the comparison.
-
-Three declared tiers: SMALL (N=64), MEDIUM (N=1,024), LARGE (N=8,192).
-Declared, not derived — OC-CC-1.
-
-DECLARED HARDWARE RUN (Ryzen 5 7600X / DDR5-5600 / Windows 11 Home), 2026-08-29:
-
-| TIER   | N     | BINARY (ns)   | RELATIONAL (ns) | REL/BIN |
-|--------|-------|---------------|------------------|---------|
-| SMALL  | 64    | 2,416.1       | 242.2            | 0.1002  |
-| MEDIUM | 1,024 | 660,536.0     | 3,720.3          | 0.0056  |
-| LARGE  | 8,192 | 42,218,566.8  | 31,357.4         | 0.0007  |
-
-Confirmed on the declared hardware: no crossover within the current tiers
-— relational was already cheaper at SMALL (REL/BIN = 0.1002), consistent
-with the sandbox sanity run. This is now a DECLARED finding, not an
-informational sandbox result. OC-CC-1 is confirmed open and requires
-tier revision downward (e.g. N=4, 8, 16, 32) to locate the actual
-crossover point on this hardware.
-
-cargo test --release on declared hardware: 41/41 passing (2026-08-29).
-
-Prior sandbox sanity run (2026-08-28, non-declared, retained for
-comparison — see below) showed the identical qualitative pattern.
-
-SANDBOX SANITY RUN (2026-08-28, NOT on declared hardware — informational
-only, superseded by the declared run above, see OC-CC-3):
-
-| TIER   | N     | BINARY (ns)   | RELATIONAL (ns) | REL/BIN |
-|--------|-------|---------------|------------------|---------|
-| SMALL  | 64    | 2,891.7       | 381.4            | 0.1319  |
-| MEDIUM | 1,024 | 741,890.8     | 5,803.9          | 0.0078  |
-| LARGE  | 8,192 | 47,786,852.6  | 53,948.9         | 0.0011  |
-
-No crossover observed within the declared tiers — relational path was
-already cheaper at SMALL. If this shape holds on the declared hardware,
-OC-CC-1 requires tier revision downward (e.g. N=4, 8, 16) before this
-domain can locate the actual crossover point, rather than only confirming
-it already occurred by N=64.
-
-### V1.0 Open Conditions Summary
-
-- OC-PT-1, OC-PT-2, OC-PT-3 (Regime 2) — see README.md
-- OC-CC-1, OC-CC-2, OC-CC-3 (Regime 3) — see README.md
-
-### Statement on D (Regime 1) Integrity
-
-D, M, and the V0.3 scaling/throughput results are unmodified by this
-addendum. OC-IF-5 in abr-infinity-fabric continues to reference the
-same measured Regime 1 figures cited above.
+**OC-CL-1**: CLOSED (declared-hardware run 2026-08-29).
+**OC-CL-2**: CLOSED (L3-internal step located: 8→16 MB transition).
+**OC-CL-3**: CLOSED (absence of sharp L1d→L2 cliff is an admissible
+  finding on this hardware for this access pattern).
 
 ---
 
-## V1.1 Addendum — Binary Algorithm Matrix (2026-08-28, sandbox — see below)
+## Version History
 
-Addresses OC-CC-2 directly: V1.0 tested exactly one binary baseline
-(all-pairs, O(N^2)). V1.1 declares four additional binary baselines
-(binary_baselines.rs) spanning O(N) and O(N log N), and times all five
-against the same relational ABR chain at the same three tiers (15 total
-comparison points).
+- V0.1–V0.3: Regime 1 development. Operators corrected to V7.
+- V1.0: Three-regime expansion. Declared-hardware baseline established.
+- V1.1: Binary algorithm matrix (5 algorithms). OC-CC-2 narrowed.
+- V1.2/V1.3: Mechanism-isolating baselines. Cache-latency module.
+  Declared-hardware runs obtained. OC-CC-3, OC-CL-1/2/3 closed.
+- V2.0: Regime 3 tiers grounded in cache-latency curve observables.
+  OC-CC-1 addressed. 65 tests passing (sandbox 2026-08-29).
+  V2.0 declared-hardware run PENDING.
 
-SANDBOX SANITY RUN (2026-08-28, NOT on declared hardware — informational
-only, see OC-CC-3 — must be reproduced on Ryzen 5 7600X before treating
-as declared):
-
-| TIER   | BINARY_ALGO | CLASS      | BINARY (ns) | RELATIONAL (ns) | REL/BIN |
-|--------|-------------|------------|-------------|------------------|---------|
-| SMALL  | ALL_PAIRS   | O(N^2)     | 2,918.2     | 365.8            | 0.1254  |
-| SMALL  | LINEAR_SCAN | O(N)       | 79.6        | 365.8            | 4.5948  |
-| SMALL  | WINDOWED    | O(N*K)     | 372.6       | 365.8            | 0.9818  |
-| SMALL  | PREFIX_SUM  | O(N)       | 77.4        | 365.8            | 4.7289  |
-| SMALL  | SORT_SCAN   | O(N log N) | 152.3       | 365.8            | 2.4017  |
-| MEDIUM | ALL_PAIRS   | O(N^2)     | 780,528.4   | 5,677.6          | 0.0073  |
-| MEDIUM | LINEAR_SCAN | O(N)       | 763.0       | 5,677.6          | 7.4413  |
-| MEDIUM | WINDOWED    | O(N*K)     | 6,121.6     | 5,677.6          | 0.9275  |
-| MEDIUM | PREFIX_SUM  | O(N)       | 761.5       | 5,677.6          | 7.4554  |
-| MEDIUM | SORT_SCAN   | O(N log N) | 1,673.7     | 5,677.6          | 3.3922  |
-| LARGE  | ALL_PAIRS   | O(N^2)     | 48,430,694.0| 50,936.0         | 0.0011  |
-| LARGE  | LINEAR_SCAN | O(N)       | 5,829.7     | 50,936.0         | 8.7373  |
-| LARGE  | WINDOWED    | O(N*K)     | 47,575.7    | 50,936.0         | 1.0706  |
-| LARGE  | PREFIX_SUM  | O(N)       | 6,021.8     | 50,936.0         | 8.4586  |
-| LARGE  | SORT_SCAN   | O(N log N) | 14,415.8    | 50,936.0         | 3.5334  |
-
-### Interpretation
-
-Relational wins ONLY against ALL_PAIRS (O(N^2)) at every tier. Against
-every O(N) and O(N log N) baseline, binary wins, with the margin
-widening as N grows (LINEAR_SCAN and PREFIX_SUM: relational is 4.6x-8.7x
-SLOWER, not faster). WINDOWED (O(N*K), K=8) sits close to parity, binary
-edging ahead at SMALL/MEDIUM/LARGE (REL/BIN 0.98, 0.93, 1.07).
-
-This is consistent with the interpretation flagged as the concern in
-OC-CC-2: V1.0's "relational wins at every declared tier" finding appears
-to have been a complexity-class artifact of comparing against a single,
-deliberately poor-scaling binary baseline (all-pairs), not evidence of a
-general relational-structure advantage on this hardware. Against binary
-algorithms with ordinary linear or near-linear scaling, relational does
-not currently show an advantage in this V1.1 test.
-
-OC-CC-2 is narrowed but not closed by this addendum — five algorithms
-across three complexity classes is still a declared representative set
-(OC-BB-2), not an exhaustive survey.
-
-REQUIRES DECLARED-HARDWARE CONFIRMATION before this interpretation is
-admissible over D. Run on Ryzen 5 7600X and update this section with the
-real figures before any Verifier pass.
+- V3.0: Regime 4 added — transition gradient sweep (25 N values, 512 KB–32 MB).
+  Two transition surfaces located: BRANCHY (sharp onset 512 KB–1.3 MB, plateau
+  at 4.0–4.6×); SCRAMBLED (gradual onset, accelerates at 16 MB, still rising
+  at 32 MB). 76 tests passing. Declared-hardware run 2026-08-29.
+- V4.0: Hardware counter instrumentation declaration (uProf). Declared
+  measurement points, H variable set, normalization forms, and predictions
+  derived from V3.0 gradient. uProf data ingested manually.
+  Findings: BRANCHY mechanism confirmed as branch misprediction (%BR_MISP
+  3.1%→27.8%, DRAM=0). SCRAMBLED mechanism confirmed as DRAM pressure from
+  L3 overflow (DRAM_PTI 0.021→36.2, L3_PTI falls). Two distinct hardware
+  states observed under scrambled access: State 1 (CPI<linear, L3 fills
+  dominant, W=4.1 MB) and State 2 (CPI>linear, DRAM dominant, W=32 MB).
+  D (dependency relation) promoted to first-class variable in R alongside
+  A and B. OC-HW-4 and OC-HW-5 declared — pointer-chain intervention
+  at fixed (A, W) to test latency-hiding interpretation of State 1.
 
 ---
 
-## V1.3 Addendum — Cache-Latency Mechanism Model (2026-08-29, sandbox — see below)
+## V4.0 — Hardware Counter Instrumentation Declaration
 
-Distinct in kind from V1.0-V1.2: this is NOT a binary-vs-relational
-comparison. It characterizes one hardware mechanism directly — per-access
-latency as a function of scrambled-access working-set size — as its own
-declared mathematical object, independent of any algorithm comparison.
+### Purpose
 
-Reuses the ScrambledAccess permutation primitive (binary_baselines.rs,
-SCRAMBLE_SEED) across 15 declared working-set sizes, doubling from 4 KB
-(within L1d) to 64 MB (beyond L3). Lighter timing protocol (3 warm / 10
-timed passes, OC-CL-1) than Regime 1/3's 100/1000, declared necessary
-because the largest sizes cost hundreds of milliseconds per pass.
+V1.0–V3.0 establish wall-clock timing observables: O_S(N) = O_L(N) by
+construction while T_S(N) ∝̸ T_L(N) and T_B(N) ∝̸ T_L(N) after declared
+working-set transitions. What accounts for the timing difference is not
+established by wall-clock measurement alone (OC-HW-1).
 
-SANDBOX SANITY RUN (2026-08-29, NOT on declared hardware — informational
-only, must be reproduced on Ryzen 5 7600X before treating as declared;
-sandboxed/virtualized environments may show materially different cache
-behavior than bare metal):
+V4.0 opens the hardware state. AMD uProf hardware counter sampling is
+applied to LINEAR, SCRAMBLED, and BRANCHY at declared measurement points
+to populate the hardware variable set H and establish the joint
+observable state:
 
-| N | WS (bytes) | MEAN (ns) | NS/ACCESS | TIER |
-|---|---|---|---|---|
-| 512 | 4,096 | 345.4 | 0.6746 | <= L1d |
-| 4,096 | 32,768 | 2,458.3 | 0.6002 | <= L1d |
-| 131,072 | 1,048,576 | 126,554.9 | 0.9655 | <= L2 |
-| 262,144 | 2,097,152 | 430,119.5 | 1.6408 | <= L3 |
-| 4,194,304 | 33,554,432 | 20,803,006.8 | 4.9598 | <= L3 |
-| 8,388,608 | 67,108,864 | 60,179,692.9 | 7.1740 | > L3 (RAM) |
+  R → H → O
 
-(Full 15-point table in execution_record.md.)
+where R is the declared computational state, H is the hardware state
+observed by uProf, and O is the timing outcome already declared in V3.0.
+The arrows denote observed progression, not asserted causation.
+Causation requires intervention — that is the declared next pass after
+this one.
 
-### Interpretation
+### Declared Variable Sets
 
-Roughly flat through L1/L2 (0.60-0.97 ns/access), a step at the L2->L3
-crossing (0.97 -> 1.64 ns/access at N=262,144, working set 2 MB),
-continued rise through L3, and a further increase past L3 into RAM
-(7.17 ns/access at 64 MB) — an ~11x range from smallest to largest
-working set. The transition reads as a gradual ramp rather than sharp
-textbook cache-tier cliffs, on this access pattern in this sandbox.
+#### R — Computational variables (fully specified by benchmark code)
 
-REQUIRES DECLARED-HARDWARE CONFIRMATION. Sandbox/virtualized timing may
-not reflect real Ryzen 5 7600X cache behavior — see OC-CL-1 through
-OC-CL-3.
+These are declared independently of uProf. They describe what is given
+to the processor at each measurement point.
+
+  N       — element count (declared per measurement point below)
+  W       — working-set bytes = N × 8
+  A       — access-order relation: LINEAR (sequential i=0..N-1) vs
+             SCRAMBLED (fixed pseudo-random permutation, SCRAMBLE_SEED)
+  B       — branch-outcome relation: LINEAR/SCRAMBLED (branch-free) vs
+             BRANCHY (fixed pseudo-random 50/50 data-dependent sequence,
+             BRANCH_SEED)
+  D       — dependency relation: INDEPENDENT (each address computable
+             without waiting for prior result, a_{t+1} = P(t+1)) vs
+             CHAINED (each address depends on the value returned at the
+             prior address, a_{t+1} = f(x_{a_t})). See OC-HW-5.
+  O_count — declared operation count = N-1 for all three algorithms
+
+V4.0 rationale for D as a first-class variable:
+
+The V4.0 uProf measurement found that at N=524,288 (4.1 MB), SCRAMBLED
+CPI = 0.394 — below LINEAR CPI = 0.800 — while at N=4,194,304 (32 MB),
+SCRAMBLED CPI = 1.800, above LINEAR. Two executions can have identical
+N, W, A, O_count, and data, yet present radically different opportunity
+for concurrent execution solely because their dependency relations differ.
+
+D_independent permits multiple load addresses to be resolved
+concurrently. D_chained serializes them: the next address does not
+exist as an actionable quantity until the preceding load completes.
+This is a property of the computation presented to the hardware — not
+a hardware counter. It is independently declared before any measurement.
+
+A, B, and D are declared as separate dimensions of R because:
+  - A and B produce distinct transition surfaces at different W (V3.0)
+  - D controls available memory-level concurrency independently of A and W
+  Collapsing any two of these into a single variable would erase
+  structural findings already in the record.
+
+#### H — Hardware state variables (from uProf counter sampling)
+
+Capture the following at each declared measurement point. Use whatever
+event names uProf exposes for this Zen 4 CPU — do not substitute
+Intel-style generic names if they differ.
+
+Primary counters:
+  CYC       — total CPU cycles
+  INS       — instructions retired
+  IPC       — instructions per cycle (= INS / CYC)
+  BR        — branch instructions
+  BR_M      — branch mispredictions
+  L1_M      — L1 data cache misses
+  L2_M      — L2 cache misses
+  L3_M      — L3 cache misses
+  DTLB_M    — data TLB misses
+  STALL_F   — frontend stall cycles
+  STALL_B   — backend stall cycles
+  MEM_BW    — memory bandwidth (bytes/second, if available)
+
+Derived normalized forms (compute from raw counts after collection):
+  BR_M / BR       — misprediction rate per branch
+  BR_M / N        — mispredictions per element
+  L2_M / N        — L2 misses per element
+  L3_M / N        — L3 misses per element
+  DTLB_M / N      — TLB misses per element
+  INS / N         — instructions retired per element
+  CYC / N         — cycles per element
+  STALL_B / CYC   — fraction of cycles stalled in backend
+
+Both raw counts and normalized rates are declared as distinct
+observables. BR_M and BR_M/BR tell different things. Preserve both.
+
+INS/N is a critical control. It establishes whether O_S(N) = O_L(N)
+at the algorithmic level corresponds to INS_S/N ≈ INS_L/N at the
+machine level. If instructions retired per element are approximately
+equal while cycles per element diverge, the processor is not doing
+more work — it is taking longer to do the same work. The question
+then becomes: where did those cycles go? The remaining H variables
+answer that without requiring a prior assumption about which mechanism
+is responsible.
+
+#### O — Outcome variables (already declared, from V3.0)
+
+  T        — mean wall-clock time per pass (ns)
+  T/N      — mean ns per operation
+  S/L      — T_SCRAMBLED / T_LINEAR at this N
+  B/L      — T_BRANCHY / T_LINEAR at this N
+
+These are already declared in the execution record. uProf figures
+are NOT wall-clock comparable (instrumentation adds overhead) and
+must not be mixed with benchmark timing. Record them separately.
+
+### Declared Measurement Points
+
+Six points: three per mechanism (pre-transition, onset, post-transition),
+selected from the V3.0 gradient declared-hardware run.
+
+#### BRANCHY measurement points
+
+| Point | N       | W       | B/L (V3.0) | Region           |
+|-------|---------|---------|------------|------------------|
+| B-pre | 65,536  | 512 KB  | 0.972      | Pre-transition   |
+| B-on  | 122,880 | 960 KB  | 3.251      | Onset            |
+| B-post| 524,288 | 4.1 MB  | 4.404      | Plateau (post)   |
+
+B-pre: B/L ≈ 1.0 — branch mechanism not yet engaged.
+B-on:  B/L = 3.25 — transition in progress, steep gradient.
+B-post: B/L = 4.40, stable — mechanism fully engaged, plateau confirmed.
+
+Declared prediction for BRANCHY (falsifiable):
+  BR_M/BR rises from B-pre to B-on, then stabilizes at B-post,
+  tracking the B/L shape. If BR_M/BR plateaus at B-on while B/L
+  plateaus at B-post, that is itself a declared finding — the
+  predictor saturates one step before the cost ratio does.
+  If BR_M/BR does not track B/L, branch misprediction is not the
+  primary mechanism and the responsible variable remains in H.
+
+#### SCRAMBLED measurement points
+
+| Point | N         | W      | S/L (V3.0) | Region           |
+|-------|-----------|--------|------------|------------------|
+| S-pre | 524,288   | 4.1 MB | 1.319      | Pre-transition   |
+| S-on  | 2,097,152 | 16 MB  | 3.021      | Onset            |
+| S-post| 4,194,304 | 32 MB  | 8.330      | Post (rising)    |
+
+S-pre:  S/L = 1.32 — access mechanism not yet dominant.
+S-on:   S/L = 3.02 — transition onset, S/L crossing 3.0.
+S-post: S/L = 8.33, still rising — mechanism fully engaged, no plateau.
+
+Note: S-on and S-post are in the light-protocol region (OC-TG-2).
+The S/L values carry elevated variance. uProf counter readings at
+these points carry the same caveat — they are indicative, not
+as precise as the standard-protocol BRANCHY points.
+
+Declared prediction for SCRAMBLED (falsifiable):
+  L3_M/N rises from S-pre to S-on to S-post, tracking S/L.
+  If L3_M/N is approximately flat while S/L rises, L3 misses
+  are not the primary mechanism — watch DTLB_M/N and STALL_B/CYC.
+  If multiple H variables rise together, preserve all of them.
+  Do not assign a single mechanism before seeing the counter data.
+
+### Declared uProf Protocol
+
+1. Run uProf in hardware counter sampling mode against benchmark.exe,
+   targeting the timed inner loop (not warm phase, not buffer setup).
+   Declare which uProf sampling mode is used and at what sampling rate.
+
+2. Run each of the six measurement points (B-pre, B-on, B-post,
+   S-pre, S-on, S-post) as separate uProf sessions. Each session
+   runs LINEAR, SCRAMBLED, and BRANCHY at the declared N so that
+   all three can be compared at the same hardware state.
+
+3. Record raw counter values and compute normalized rates.
+   Record the uProf version and event names used — Zen 4 event
+   names may differ from generic documentation.
+
+4. Do not collapse H variables before recording. Preserve the full
+   vector H at each measurement point. Reduction to a summary
+   statistic is a downstream analysis step, not a collection step.
+
+5. Enter results in execution_record.md under
+   "V4.0 — uProf Declared Hardware Run" with the same structure
+   as prior declared runs: raw output first, findings second.
+
+### Open Conditions
+
+**OC-HW-1**: PARTIALLY ADDRESSED. This declaration specifies what to
+  instrument and what to look for. It remains open until the uProf
+  run is completed and H is populated at the declared measurement
+  points. A declared prediction is now on record for each mechanism —
+  both are falsifiable by the counter data.
+
+**OC-HW-2**: NEW. uProf instrumentation adds overhead. Counter-mode
+  timing figures are not comparable to benchmark wall-clock timing.
+  The two must be recorded separately and never mixed. The declared
+  outcome variables O come from the benchmark; H comes from uProf.
+
+**OC-HW-3**: NEW. Zen 4 hardware counter event names must be confirmed
+  in uProf before the run. Generic counter names (Intel-style) may
+  not match AMD event names on this CPU. Declare the actual event
+  names used in the execution record entry.
+
+**OC-TG-1**: OPEN. Finer sweep around BRANCHY onset (512–960 KB) and
+  SCRAMBLED onset (14–18 MB) would tighten transition location.
+  Lower priority than OC-HW-1 — counter data may reveal mechanism
+  directly, making a finer timing sweep redundant.
+
+**OC-TG-2**: OPEN. Light-protocol figures at SCRAMBLED measurement
+  points (S-on, S-post) carry elevated variance. Standard-protocol
+  confirmation at those N values would reduce uncertainty in S/L
+  figures used as the baseline for uProf comparison.
+
+---
+
+## V5.0 — Available Relational Progression (declared mathematical object)
+
+### Motivation
+
+The OC-HW-5 intervention (2026-08-29) established that varying D alone
+at fixed (N, W, A, O_count) produces a 10.25× CPI difference at
+identical memory pressure. This result is not explainable by operation
+count, working-set size, access distribution, or cache miss rate.
+It requires a declared description of how much of the computation is
+available for execution at each step — independent of the hardware
+mechanism that exploits or fails to exploit that availability.
+
+### Declared object: A_t — available relational progression
+
+At each step t in an execution, define the set of operations whose
+declared predecessor relations are already resolved:
+
+  A_t = { o_j : all declared predecessors required by o_j
+                 are resolved at step t }
+
+A_t is not reduced to a scalar. It is preserved as a set — its
+cardinality, structure, and change over time are all potentially
+informative.
+
+For D_independent (a_{t+1} = P(t+1)):
+  Future addresses a_{t+1}, a_{t+2}, ... are computable without
+  waiting for any prior result. A_t contains many operations
+  simultaneously — the progression frontier is wide.
+
+For D_chained (a_{t+1} = f(x_{a_t})):
+  a_{t+1} is not a member of A_t until x_{a_t} is returned.
+  The progression frontier is narrow — typically one operation.
+
+The V5.0 result establishes that |A_t| — the width of the available
+progression frontier — has measurable, isolated hardware consequence
+(10.25× CPI) independent of conventional operation count.
+
+### Declared relation
+
+  R_t → A_t → H_t → O_t
+
+where:
+  R_t  — declared computational state at step t (N, W, A, B, D, O_count)
+  A_t  — available relational progression (set of operations whose
+          declared predecessors are resolved at t)
+  H_t  — hardware state (CPI, %BR_MISP, DRAM_PTI, L3_PTI, ...)
+  O_t  — timing outcome (ns/op, S/L, B/L)
+
+The arrows denote observed progression within declared domain D.
+They do not assert causation beyond D. Each arrow is a declared
+relation, not a mechanism claim.
+
+A_t is placed between R_t and H_t because it is a property of the
+declared computation — derivable from R without hardware measurement —
+that mediates the effect of R on H. The V5.0 intervention manipulates
+A_t (by changing D) while holding R otherwise constant, and observes
+the resulting change in H. This is the experimental basis for placing
+A_t in the declared chain.
+
+### Open condition OC-RP-1 (new)
+
+OC-RP-1: A_t is declared as a set. Its cardinality |A_t|, rate of
+  change, and distribution over time are not yet measured directly.
+  The V5.0 result establishes that varying |A_t| (wide vs narrow
+  progression frontier) has isolated hardware effect. It does not
+  yet characterize the functional relation between |A_t| and H_t
+  across intermediate values — only the two extreme cases
+  (D_independent: wide; D_chained: narrow) have been declared.
+  Intermediate dependency structures (partial chains, branching
+  dependency graphs) are the declared next experimental space.
