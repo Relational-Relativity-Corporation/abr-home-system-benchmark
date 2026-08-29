@@ -1,5 +1,5 @@
-﻿// main.rs — Metatron Dynamics, Inc. V0.3
-// ABR home system benchmark entry point.
+﻿// main.rs — Metatron Dynamics, Inc. V1.0
+// ABR home system benchmark entry point — three-regime substrate comparison.
 // Bounded over D. No claim beyond D.
 
 use abr_home_system_benchmark::{
@@ -7,11 +7,18 @@ use abr_home_system_benchmark::{
     timing_harness::{run_timing_harness, N_WARM, N_TIMED},
     throughput_derivation::{derive_throughput, throughput_report},
     scaling::{run_scaling_measurement, scaling_report},
+    process_topology::{build_process_graph, example_session_trace, process_graph_report},
+    complexity_crossover::{run_crossover_measurement, crossover_report},
+    cache_latency_model::{run_cache_sweep, cache_sweep_report},
 };
 
 fn main() {
-    println!("ABR Home System Benchmark V0.3 — Metatron Dynamics, Inc.");
+    println!("ABR Home System Benchmark V1.0 — Metatron Dynamics, Inc.");
     println!("Bounded over D. No claim beyond D.\n");
+    println!("V1.0: three-regime binary-vs-relational substrate comparison.");
+    println!("Regime 1: ABR operator cost (below, unchanged from V0.3).");
+    println!("Regime 2: OS-to-CPU process exchange layer.");
+    println!("Regime 3: task-complexity crossover (5 binary algos vs ABR chain).\n");
 
     println!("V0.3: operators corrected to match kernel V7.");
     println!("B: immediate-successor input values (not recursive).");
@@ -43,4 +50,27 @@ fn main() {
     println!("(addresses OC-HB-4 -- condition remains open pending operator isolation)\n");
     let scaling_points = run_scaling_measurement();
     println!("{}", scaling_report(&scaling_points));
+
+    // ── Regime 2: OS-to-CPU process exchange layer ────────────────────────
+    println!("\n\n=== REGIME 2: PROCESS TOPOLOGY (OC-PT-1, OC-PT-2, OC-PT-3 open) ===\n");
+    let process_graph = build_process_graph(example_session_trace());
+    println!("{}", process_graph_report(&process_graph));
+    println!("NOTE: example_session_trace() is a hand-transcribed partial trace");
+    println!("from a single uProf 'Select Profile Target' screen. Replace with a");
+    println!("full uProf export before treating any result here as declared over D.\n");
+
+    // ── Regime 3: task-complexity crossover ────────────────────────────────
+    println!("\n=== REGIME 3: TASK-COMPLEXITY CROSSOVER (OC-CC-1, OC-CC-2, OC-CC-3 open) ===\n");
+    let crossover_points = run_crossover_measurement();
+    println!("{}", crossover_report(&crossover_points));
+
+    // ── Cache-latency mechanism characterization (NOT a comparison) ────────
+    println!("\n=== HARDWARE MECHANISM: CACHE-LATENCY CURVE (OC-CL-1, OC-CL-2, OC-CL-3 open) ===\n");
+    println!("This sweep does NOT compare relational vs binary. It characterizes\n");
+    println!("ONE mechanism directly: how access latency changes with working-set\n");
+    println!("size, on the declared hardware, independent of any algorithm.\n");
+    println!("NOTE: this sweep can take 30-90+ seconds at the largest declared\n");
+    println!("sizes (up to 64MB working set) — this is expected, not a hang.\n");
+    let cache_points = run_cache_sweep();
+    println!("{}", cache_sweep_report(&cache_points));
 }
