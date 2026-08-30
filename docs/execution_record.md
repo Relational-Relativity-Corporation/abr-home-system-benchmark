@@ -1670,3 +1670,622 @@ OC-V9-1 (NEW): The OC-RP-3 result is declared under A=scrambled only.
   variation in L2_PTI or DRAM_PTI is expected (sequential access
   keeps working set in L2 regardless of k) but this has not been
   measured across the k sweep.
+
+---
+
+## V10.0 — A×D×S×B Factorial Block: Four-Factor Extension (2026-08-30)
+
+AMD uProf Version 5.3.521.0. Profile type: assess_ext.
+Hardware: Ryzen 5 7600X / DDR5-5600 / Windows 11. [N tests passing — update after build].
+Target: probe.exe V9.0 — sixteen isolated sessions.
+
+OC-B-1 addressed: B dimension added as fourth declared factor.
+Primary declared finding: I_{A,D,S,B} — the four-way interaction vector.
+Whether I_{A,D,S,B} is zero or non-zero is undeclared prior to measurement.
+
+Observable provenance for B:
+  B (declared intervention: data-dependent branch pattern, BRANCH_SEED)
+  → %BR_MISP (observed hardware response: branch misprediction rate, uProf)
+  → CPI (observed execution cost)
+
+Protocol: S0 nodes: standard (100w/1000t). S1 nodes: light (10w/100t) — OC-TG-2.
+
+B=none nodes re-measured in this block for internal consistency.
+Prior V8.0 values (F000–F111) retained as provenance references only.
+
+### Declared H — sixteen nodes
+
+| Node  | A   | D   | S  | B      | CPI | DRAM_PTI | L3_PTI | L2_PTI | %BR_MISP | %L1_MISS |
+|-------|-----|-----|----|--------|-----|----------|--------|--------|----------|----------|
+| G0000 | seq | ind | S0 | none   |     |          |        |        |          |          |
+| G0100 | scr | ind | S0 | none   |     |          |        |        |          |          |
+| G0010 | seq | ch8 | S0 | none   |     |          |        |        |          |          |
+| G0110 | scr | ch8 | S0 | none   |     |          |        |        |          |          |
+| G1000 | seq | ind | S1 | none   |     |          |        |        |          |          |
+| G1100 | scr | ind | S1 | none   |     |          |        |        |          |          |
+| G1010 | seq | ch8 | S1 | none   |     |          |        |        |          |          |
+| G1110 | scr | ch8 | S1 | none   |     |          |        |        |          |          |
+| G0001 | seq | ind | S0 | branchy|     |          |        |        |          |          |
+| G0101 | scr | ind | S0 | branchy|     |          |        |        |          |          |
+| G0011 | seq | ch8 | S0 | branchy|     |          |        |        |          |          |
+| G0111 | scr | ch8 | S0 | branchy|     |          |        |        |          |          |
+| G1001 | seq | ind | S1 | branchy|     |          |        |        |          |          |
+| G1101 | scr | ind | S1 | branchy|     |          |        |        |          |          |
+| G1011 | seq | ch8 | S1 | branchy|     |          |        |        |          |          |
+| G1111 | scr | ch8 | S1 | branchy|     |          |        |        |          |          |
+
+S1 nodes carry elevated variance (OC-TG-2, light protocol).
+OC-V9-1: %BR_MISP at B=none nodes — record and confirm near-zero.
+If %BR_MISP is non-negligible at any B=none node, flag that node.
+
+### A Operator — A-edge contrast vectors (ΔCPI shown; compute full H vector)
+
+B=none face:
+  G0000→G0100  D=ind S0 B=none  ΔCPI=
+  G0010→G0110  D=ch8 S0 B=none  ΔCPI=
+  G1000→G1100  D=ind S1 B=none  ΔCPI=
+  G1010→G1110  D=ch8 S1 B=none  ΔCPI=
+
+B=branchy face:
+  G0001→G0101  D=ind S0 B=br    ΔCPI=
+  G0011→G0111  D=ch8 S0 B=br    ΔCPI=
+  G1001→G1101  D=ind S1 B=br    ΔCPI=
+  G1011→G1111  D=ch8 S1 B=br    ΔCPI=
+
+### D-edge contrast vectors
+
+B=none face:
+  G0000→G0010  A=seq S0 B=none  ΔCPI=
+  G0100→G0110  A=scr S0 B=none  ΔCPI=
+  G1000→G1010  A=seq S1 B=none  ΔCPI=
+  G1100→G1110  A=scr S1 B=none  ΔCPI=
+
+B=branchy face:
+  G0001→G0011  A=seq S0 B=br    ΔCPI=
+  G0101→G0111  A=scr S0 B=br    ΔCPI=
+  G1001→G1011  A=seq S1 B=br    ΔCPI=
+  G1101→G1111  A=scr S1 B=br    ΔCPI=
+
+### B-edge contrast vectors (primary new edges, V9.0)
+
+  G0000→G0001  A=seq D=ind S0   ΔB·CPI=
+  G0100→G0101  A=scr D=ind S0   ΔB·CPI=
+  G0010→G0011  A=seq D=ch8 S0   ΔB·CPI=
+  G0110→G0111  A=scr D=ch8 S0   ΔB·CPI=
+  G1000→G1001  A=seq D=ind S1   ΔB·CPI=
+  G1100→G1101  A=scr D=ind S1   ΔB·CPI=
+  G1010→G1011  A=seq D=ch8 S1   ΔB·CPI=
+  G1110→G1111  A=scr D=ch8 S1   ΔB·CPI=
+
+If ΔB·CPI is constant across all 8 conditions: B contributes additively.
+If ΔB·CPI varies: B×(A,D,S) interaction is present.
+
+### Three-Way Interaction Vectors
+
+B=none face (confirm against V8.0 values within light-protocol variance):
+  I_{A,D}|S0,B=none =
+  I_{A,D}|S1,B=none =
+  I_{A,D,S}|B=none  =   (path equivalence check required)
+
+B=branchy face (new):
+  I_{A,D}|S0,B=br   =
+  I_{A,D}|S1,B=br   =
+  I_{A,D,S}|B=br    =   (path equivalence check required)
+
+### Four-Way Interaction Vector I_{A,D,S,B} — Primary Finding
+
+  I_{A,D,S,B} = I_{A,D,S}|B=br − I_{A,D,S}|B=none
+
+  CPI:      
+  DRAM_PTI: 
+  L3_PTI:   
+  L2_PTI:   
+  %BR_MISP: 
+  %L1_MISS: 
+
+OC-V9-2: path equivalence check — confirm I_{A,D,S,B} via alternate paths:
+  Via A×B slice:  I_{A,B}|{D=ch8,S1} − I_{A,B}|{D=ind,S0} =
+  Agreement with primary path: [YES / NO — record discrepancy if NO]
+
+### Primary Declared Findings
+
+[To be completed after measurement.]
+
+Finding 1 — B-edge contrast uniformity:
+  If ΔB·CPI is uniform across all 8 A×D×S combinations:
+    B contributes additively; no B×(A,D,S) interaction in CPI.
+  If ΔB·CPI varies:
+    State which combinations show elevated contrast and the direction.
+
+Finding 2 — I_{A,D,S,B}:
+  State observed value and whether zero or non-zero within declared variance.
+  If non-zero: identify which H variables carry the interaction.
+  If zero: B cost is constant across the A×D×S structure in this domain.
+
+Finding 3 — %BR_MISP at B=none nodes (OC-V9-1):
+  State observed values. If non-negligible at any node, identify and flag.
+
+Finding 4 — %BR_MISP at B=branchy nodes:
+  State observed values. Confirm that %BR_MISP is the primary elevated
+  H variable at B=branchy nodes relative to their B=none counterparts.
+  If %BR_MISP does not rise substantially at B=branchy nodes, the declared
+  B intervention did not engage its intended mechanism — flag as OC.
+
+### Open Conditions
+
+OC-TG-2: Active. S1 nodes carry elevated variance (light protocol).
+OC-HW-2: Active. uProf timing not comparable to benchmark.exe.
+OC-V8-1: Active. chains-8-seq uses sequential index partition (unchanged).
+OC-B-1:  ADDRESSED (V9.0). B added as fourth factor.
+OC-V9-1: ACTIVE. Verify %BR_MISP near-zero at all B=none nodes.
+OC-V9-2: ACTIVE. Path equivalence check on I_{A,D,S,B} required.
+OC-V9-3 (NEW, if applicable): If %BR_MISP does not rise at B=branchy nodes,
+  the branch mechanism did not engage — declare as open and investigate
+  whether BRANCH_SEED produces sufficient misprediction at declared N values.
+
+---
+
+## OC-DRAM-1 — DRAM Latency Calibration (2026-08-30)
+
+Purpose: Close OC-DRAM-1. Replace declared-approximate DRAM_LAT (180 cycles,
+range 160–220) with a hardware-measured value on this specific system
+(Ryzen 5 7600X / DDR5-5600).
+
+Design:
+  Scrambled single-chain pointer chase (A=scr, D=ind, k=1, B=none).
+  Single chain: every access is serialized. No k-way parallelism.
+  Working set substantially larger than L3 (32MB): forces all accesses to DRAM.
+  CPI ≈ DRAM_LAT / insts_per_iter (serialized, DRAM-bound).
+  Back-calculate: DRAM_LAT = CPI × (1000 / RETIRED_BR_INST_PTI).
+
+Two declared N values:
+  CAL-2X: N=8,388,608, WS=64MB (2× L3). Primary measurement.
+  CAL-4X: N=16,777,216, WS=128MB (4× L3). Confirmation.
+  Agreement criterion: |DRAM_LAT(2X) − DRAM_LAT(4X)| ≤ 5 cycles.
+  If disagreement: L3 residency not fully evicted at CAL-2X; use CAL-4X.
+
+Protocol: dram-cal (3w/20t). Each pass at N=8M takes ~15s.
+  Warm: 3 passes. Timed: 20 passes under uProf.
+
+Run commands:
+  probe.exe scrambled-dram-cal  8388608
+  probe.exe scrambled-dram-cal 16777216
+
+### Measured H vectors
+
+| Field             | CAL-2X (N=8388608) | CAL-4X (N=16777216) |
+|-------------------|-------------------|-------------------|
+| CPI               |                   |                   |
+| RETIRED_BR_INST PTI|                  |                   |
+| %BR_MISP          |                   |                   |
+| DRAM_PTI          |                   |                   |
+| L3_PTI            |                   |                   |
+| L2_PTI            |                   |                   |
+| %L1_DC_MISSES     |                   |                   |
+
+### Back-calculation
+
+  insts_per_iter(2X) = 1000 / RETIRED_BR_INST_PTI(2X) =
+  DRAM_LAT(2X) = CPI(2X) × insts_per_iter(2X) =
+
+  insts_per_iter(4X) = 1000 / RETIRED_BR_INST_PTI(4X) =
+  DRAM_LAT(4X) = CPI(4X) × insts_per_iter(4X) =
+
+  Agreement: |DRAM_LAT(2X) − DRAM_LAT(4X)| =
+  Agreement criterion met: [YES / NO]
+
+### Verification checks
+
+  1. DRAM_PTI dominant at both N values: [YES / NO]
+     If L3_PTI > DRAM_PTI at CAL-2X, L3 not fully evicted — use CAL-4X only.
+
+  2. %BR_MISP near baseline (< 10%): [YES / NO]
+     High misprediction would add pipeline flush cost to CPI — confound.
+
+  3. DRAM_LAT falls within declared prior range (160–220 cycles): [YES / NO]
+     If outside range, declare new range and update substrate_model.rs.
+
+### Declared DRAM_LAT (post-measurement)
+
+  DRAM_LAT (hardware-measured) =          cycles
+  Source: this calibration run, Ryzen 5 7600X / DDR5-5600
+  Replaces: declared-approximate 180 cycles (range 160–220)
+
+  Updated substrate_model.rs DRAM_LAT constant: [YES / NO — record version]
+
+### OC-DRAM-1 disposition
+
+  [CLOSED / OPEN — state reason if open]
+
+---
+
+## OC-DRAM-1 / OC-DRAM-1a — Calibration Results (2026-08-30)
+
+### Gather calibration (scrambled-dram-cal)
+
+Declared intervention: WS > nominal L3 (32MB). A=scr, D=ind, B=none.
+Workload: run_scrambled — gather (independent random accesses, NOT pointer chase).
+Protocol: dram-cal (3w/20t).
+
+| Field             | CAL-2X (N=8388608, 64MB) | CAL-4X (N=16777216, 128MB) |
+|-------------------|--------------------------|-----------------------------|
+| CPI               | 2.0692                   | 2.2043                      |
+| RETIRED_BR_INST PTI| 264.0319                | 260.6101                    |
+| %BR_MISP          | 0.151%                   | 0.126%                      |
+| DRAM_PTI          | 62.5000                  | 71.2202                     |
+| L3_PTI            | 23.9277                  | 12.3958                     |
+| L2_PTI            | 2.5429                   | 2.1875                      |
+| %L1_DC_MISSES     | 41.063%                  | 49.454%                     |
+
+Declared observation: CPI ≈ 2.07–2.20 at both N values.
+This is the gather regime — MAB parallelism available.
+NOT equivalent to serialized DRAM access latency.
+Measures effective DRAM throughput under parallel access.
+
+Note: comment in probe.rs previously stated "forces every access to DRAM" —
+INADMISSIBLE. Corrected to: "WS > nominal L3 is the declared intervention.
+Observed service distribution established by H."
+
+### Pointer chase calibration (chained, k=1)
+
+Workload: run_chained — pointer chase (each address depends on prior result).
+Protocol: light (10w/100t) — protocol mismatch noted: chained at these N
+triggers light protocol, not dram-cal. This produced more timed passes (100)
+than dram-cal (20). Elevated sample count is not a defect; it is declared.
+
+| Field             | CAL-PTR-2X (chained, 64MB) | CAL-PTR-4X (chained, 128MB) |
+|-------------------|----------------------------|-----------------------------|
+| CPI               | 25.6480                    | 27.2091                     |
+| RETIRED_BR_INST PTI| 252.8828                  | 250.4467                    |
+| %BR_MISP          | 0.706%                     | 1.065%                      |
+| DRAM_PTI          | 113.7822                   | 130.1438                    |
+| L3_PTI            | 24.3357                    | 7.5398                      |
+| L2_PTI            | 2.3564                     | 2.2579                      |
+| %L1_DC_MISSES     | 48.880%                    | 49.814%                     |
+| %SMT_CONTENTION   | 0.607%                     | 4.986%                      |
+| STLI_OTHER PTI    | 0.155                      | 1.474                        |
+
+Declared observation: CPI ≈ 25.6–27.2 at both N values.
+This is the pointer chase (serialized) regime.
+
+Iteration decomposition (from probe.rs run_chained source):
+  2 dependent loads per iteration: chain[current] (serializing), values[next] (dependent).
+  values[current] forwarded from prior iteration — 0 effective misses.
+  Measured: ~3.95–3.99 instructions/iter, ~1.85–2.04 DC accesses/iter.
+  Refills/iter: 0.450+0.096+0.009=0.555 (2X), 0.520+0.030+0.009=0.559 (4X).
+  Refills/iter ≈ 0.56 — below expected ~2.0 for 2 loads at WS>>L3.
+  Discrepancy candidates: PTI sampling, prefetcher, OOO overlap — not declared.
+
+Derived cycles/iter:
+  CAL-PTR-2X: 25.6480 × (1000/252.8828) = 101.42 cycles
+  CAL-PTR-4X: 27.2091 × (1000/250.4467) = 108.64 cycles
+  Difference: 7.22 cycles — exceeds ±5-cycle closure criterion.
+
+This quantity is compound — NOT equivalent to DRAM_LAT alone.
+Contributors include: serialized load latency (chain+values, mixed service),
+SMT contention (0.6%→5.0% across N values), possible TLB walk serialization,
+PTI sampling effects. None declared as mechanism.
+
+### Declared finding (both calibration workloads)
+
+Same working-set class (WS > nominal L3) + different dependency relation
+(gather vs pointer chase) → radically different measured progression:
+  Gather: CPI ≈ 2, wall-clock ≈ 6 ns/op
+  Pointer chase: CPI ≈ 26, wall-clock ≈ 95–114 ns/op
+  Ratio ≈ 13×. Mechanistic explanation not declared.
+
+### OC-DRAM-1 disposition
+
+OC-DRAM-1: OPEN.
+DRAM_LAT not isolatable as a unique quantity from current measurements.
+Reason: cycles_per_iter is compound (OC-DRAM-1a); SMT contention not isolated;
+refill/iter accounting unresolved. substrate_model.rs DRAM_LAT remains 180
+(declared approximate) pending closure.
+
+OC-DRAM-1a: OPEN.
+Required: SMT isolation run (affix to single core, disable SMT), refill
+accounting verification, and single-load variant to separate chain[]
+latency from values[] latency.
+
+
+---
+
+## OC-DRAM-1a — Assembly Decomposition and Chain-Only Intervention (2026-08-30)
+
+### Assembly decomposition of run_chained hot loop
+
+Source: probe.s (release build, rustc stable-x86_64-pc-windows-msvc, LLVM backend)
+Function: _RNvCs8eqcXlaylXm_5probe11run_chained
+Hot loop label: .LBB10_3
+
+Declared instruction sequence (I_asm = 15):
+
+```
+movq    32(%rsp), %rax          1. Stack load: current → %rax (LOAD, L1 hit, STLF)
+cmpq    %r9, %rax               2. Bounds check: current < n (ALU)
+jae     .LBB10_9                3. Panic branch (never taken in hot path)
+cmpq    %rdx, %rax              4. Bounds check: current < chain.len() (ALU)
+jae     .LBB10_10               5. Panic branch (never taken in hot path)
+movq    (%r8,%rax,8), %r10      6. Chain load: chain[current] → %r10 (LOAD, SERIALIZING)
+cmpq    %rdx, %r10              7. Bounds check: next < values.len() (ALU)
+jae     .LBB10_11               8. Panic branch (never taken in hot path)
+incq    %r11                    9. Loop counter++ (ALU, independent)
+movsd   (%rcx,%rax,8), %xmm1   10. Load values[current] (LOAD, FP)
+subsd   (%rcx,%r10,8), %xmm1   11. Load values[next] + FP sub (LOAD+FP, DRAM-dependent)
+addsd   %xmm1, %xmm0           12. FP accumulate (FP)
+movq    %r10, 32(%rsp)          13. Stack store: current = next (STORE)
+cmpq    %r11, %r9               14. Loop termination check (ALU)
+jne     .LBB10_3                15. Loop branch (taken until last iter)
+```
+
+Declared quantities from assembly:
+  I_asm = 15 instructions per iteration
+  Branches per iteration = 4 (instructions 3, 5, 8, 15)
+  Memory operations = 5 (4 loads + 1 store: instructions 1, 6, 10, 11, 13)
+  DRAM-dependent loads = 2: instruction 6 (chain[current]) and 11 (values[next])
+  Cross-iteration address identity: A(values[current]_t) = A(values[next]_{t-1})
+    (declared from loop structure; whether this produces L1 hit is a processor-state
+    proposition not established by assembly alone)
+
+Declared BR_PTI relation:
+  4 branches / 15 instructions × 1000 = 266.7 BR/PTI (static loop)
+  Measured: 252.9 (CAL-PTR-2X), 250.4 (CAL-PTR-4X)
+  Consistency: close to 266.7 — difference explained by process-level
+  measurement including execution outside the hot loop.
+
+Declared ipi relation:
+  ipi = 4 × (1000 / BR_PTI) ≈ 15.8–16.0 (consistent with I_asm = 15)
+  Prior formula ipi = 1000/BR_PTI is RETIRED for this loop (4 branches/iter, not 1).
+
+Declared L1_DC_ACCESSES PTI relation:
+  From assembly: 5 memory operations / 15 instructions × 1000 = 333.3 expected
+  Measured: 468.2 (CAL-PTR-2X), 510.8 (CAL-PTR-4X)
+  Measured > expected. Counter-to-instruction mapping requires further declaration.
+  The 37% PMU sampling rate conclusion is REJECTED. Counter not established as
+  a simple fraction of retired memory instructions.
+
+L_candidate (not DRAM_LAT — assumptions A–C undeclared):
+  Using corrected ipi = 4 × (1000/BR_PTI):
+  cycles_per_iter = CPI × ipi ≈ 101–109 cycles (as previously measured)
+  Under declared assumptions A (equal service mix), B (linear SMT correction),
+  C (STLF overhead 4–5 cycles from SOG §2.12):
+  L_candidate ≈ 42–44 cycles per DRAM-dependent load
+  This is a candidate estimate under declared assumptions, not a measured DRAM_LAT.
+
+### Chain-only intervention design
+
+Declared intervention: ΔV: chained+values → chain-only
+  Remove: values[] accumulation (instructions 10, 11, 12 from hot loop)
+  Preserve: pointer dependency (instruction 6, chain[current] → %r10)
+  The primary serialized relation remains:
+    current_{t+1} = chain[current_t]
+
+Protocol: light (10w/100t) — same as CAL-PTR runs for direct comparability.
+N values: 8,388,608 (2X) and 16,777,216 (4X) — same as CAL-PTR runs.
+
+REQUIRED before interpreting H vector:
+  Extract run_chain_only assembly from probe.s after build.
+  Declare the actual hot-loop instruction sequence.
+  The compiler may produce a different structure without FP accumulation.
+
+Primary declared measurement:
+  ΔH = H(CAL-CHAIN-ONLY) − H(CAL-PTR) at each N
+
+Run commands:
+  probe.exe chain-only  8388608
+  probe.exe chain-only 16777216
+
+### CAL-CHAIN-ONLY-2X assembly (to be filled after build)
+
+```
+[Extract from probe.s after cargo build --release with RUSTFLAGS=--emit=asm]
+```
+
+I_asm(chain-only) = [count from assembly]
+Branches per iteration = [count]
+Memory operations = [count]
+
+### CAL-CHAIN-ONLY H vectors
+
+| Field              | CAL-CHAIN-ONLY-2X (64MB) | CAL-CHAIN-ONLY-4X (128MB) |
+|--------------------|--------------------------|---------------------------|
+| CPI                |                          |                           |
+| RETIRED_BR_INST PTI|                          |                           |
+| %BR_MISP           |                          |                           |
+| DRAM_PTI           |                          |                           |
+| L3_PTI             |                          |                           |
+| L2_PTI             |                          |                           |
+| %L1_DC_MISSES      |                          |                           |
+| %SMT_CONTENTION    |                          |                           |
+| STLI_OTHER PTI     |                          |                           |
+
+### ΔH analysis (to be filled after measurement)
+
+| Field              | ΔH (2X) | ΔH (4X) |
+|--------------------|---------|---------|
+| CPI                |         |         |
+| DRAM_PTI           |         |         |
+| L3_PTI             |         |         |
+| cycles_per_iter    |         |         |
+
+Declared finding: [to be completed after measurement]
+
+### OC-DRAM-1a disposition
+
+OC-DRAM-1a: OPEN pending chain-only measurement and assembly declaration.
+
+---
+
+## OC-DRAM-1a — Chain-Only Intervention Results (2026-08-30)
+
+### Assembly declaration: run_chain_only hot loop
+
+Source: probe.s (release build, rustc stable-x86_64-pc-windows-msvc)
+Function: _RNvCs8eqcXlaylXm_5probe14run_chain_only
+Hot loop label: .LBB13_3
+
+Declared instruction sequence:
+
+```
+movq    40(%rsp), %rax          1. Stack load: current → %rax (LOAD)
+cmpq    %rdx, %rax              2. Bounds check: current < n (ALU)
+jae     .LBB13_7                3. Panic branch (never taken in hot path)
+incq    %r8                     4. Loop counter++ (ALU, independent)
+movq    (%rcx,%rax,8), %rax     5. Chain load: chain[current] → %rax (LOAD, SERIALIZING)
+movq    %rax, 40(%rsp)          6. Stack store: current = next (STORE)
+#APP #NO_APP                    7. black_box fence
+cmpq    %r8, %rdx               8. Loop termination check (ALU)
+jne     .LBB13_3                9. Loop branch
+```
+
+Declared quantities from assembly:
+  I_asm = 9 instructions per iteration
+  B_asm = 2 branches per iteration (instructions 3 and 9)
+  Memory operations = 3 (2 loads + 1 store: instructions 1, 5, 6)
+  DRAM-dependent loads = 1: instruction 5 (chain[current]) only
+  values[] path: entirely absent from this compiled loop
+
+Comparison to run_chained assembly (I_asm=15, B_asm=4):
+  Removed: values[current] load (movsd), values[next] load+FP sub (subsd),
+           FP accumulate (addsd), values.len() bounds check+branch (cmpq+jae)
+  Changed: chain load result now overwrites %rax directly (no separate %r10)
+  Retained: stack store/load recurrence, chain load serialization, loop branch
+
+### BR_PTI internal consistency
+
+Assembly predicts: BR_PTI = (B_asm / I_asm) × 1000 = (2/9) × 1000 = 222.22
+Measured (CAL-CHAIN-ONLY-2X): 222.6659
+Residual: |222.67 − 222.22| = 0.45 PTI (~0.20%)
+I_derived = 2 × (1000 / 222.6659) = 8.982 vs I_asm = 9 (~0.2% residual)
+
+Declared: the assembly-derived BR_PTI relation and uProf observation agree
+within ~0.2% under these conditions (2X, light protocol, low SMT contention).
+This is an internal consistency result for the 2X measurement. It does not
+extend to the 4X measurement — see OC-BR-1 below.
+
+### Declared H vectors: chain-only
+
+| Field              | CO-2X (64MB)  | CO-4X (128MB) |
+|--------------------|---------------|---------------|
+| CPI                | 2.5743        | 2.0991        |
+| RETIRED_BR_INST PTI| 222.6659      | 178.6806      |
+| %BR_MISP           | 4.9490%       | 9.0766%       |
+| L1_DC_ACCESSES PTI | 641.6128      | 677.3720      |
+| %L1_DC_MISSES      | 19.3167%      | 15.8088%      |
+| DRAM_PTI           | 62.3410       | 47.7332       |
+| L3_PTI             | 22.1570       | 14.6224       |
+| L2_PTI             | 18.8295       | 23.5962       |
+| STLI_OTHER PTI     | 75.8074       | 48.4276       |
+| %SMT_CONTENTION    | 15.6440%      | 16.1508%      |
+
+Protocol: light (10w/100t), same as CAL-PTR runs. CAL-CHAIN-ONLY-2X was
+re-run (v2) after hardware lock error on first attempt; data from v2.
+
+### ΔV observations: chained+values → chain-only
+
+Declared intervention: remove values[] accumulation, preserve pointer dependency.
+
+| Field         | ΔH(2X) = CO-2X − PTR-2X | ΔH(4X) = CO-4X − PTR-4X |
+|---------------|--------------------------|--------------------------|
+| CPI           | −23.0737                 | −25.1100                 |
+| DRAM_PTI      | −51.44                   | −82.41                   |
+| L3_PTI        | −2.18                    | +7.08                    |
+| L2_PTI        | +16.47                   | +21.34                   |
+| STLI_PTI      | +75.65                   | +46.95                   |
+
+### Declared findings from ΔV
+
+Finding 1 — CPI:
+  CPI(chained+values, 2X) ≈ 25.6480
+  CPI(chain-only, 2X) = 2.5743
+  ΔV·CPI ≈ −23.07
+  The intervention removing values[] and the resulting compiled-loop
+  changes corresponds to an approximately 23-CPI reduction at 2X.
+  NOTE: ΔV·CPI ≠ L_values_next. The intervention changed the instruction
+  stream and other measured processor relations simultaneously (see STLI).
+  Attribution of ΔV·CPI to any single mechanism is not established.
+
+Finding 2 — BR_PTI consistency (stated above):
+  Assembly prediction and measurement agree within ~0.2%.
+
+Finding 3 — STLI_OTHER:
+  STLI_OTHER PTI: 0.1554 (PTR-2X) → 75.8074 (CO-2X). ΔV = +75.65.
+  The ΔV intervention exposed a strong STLI relation not present in
+  chained+values. The chain-only loop contains a stack-mediated recurrence
+  (store next → stack, load current ← stack) without intervening values[]
+  instructions. The connection between this STLI observation and observed
+  CPI is not yet established.
+  → OC-STLI-1 (NEW, OPEN): determine the relation between STLI_OTHER PTI,
+    the chain-only instruction sequence, and observed CPI before any
+    additive STLI contribution is assigned to CPI.
+
+Finding 4 — Cache service distribution shift:
+  Under ΔV, DRAM_PTI decreased, L2_PTI increased, and L3_PTI changed.
+  This is an observed shift in service distribution between the two workloads.
+  Whether the same chain[] accesses account for this shift, or whether other
+  aspects of the changed instruction stream are involved, is not established.
+
+Finding 5 — CPI direction across N:
+  CPI(chain-only, 2X) = 2.5743 > CPI(chain-only, 4X) = 2.0991
+  Δ_N CPI < 0 for 64MB → 128MB within the chain-only workload.
+  This is the opposite direction from chained+values (where CPI rises with N).
+  Recorded as observed. No mechanism declared.
+
+### Retired assumption
+
+Assumption A (equal service distribution for chain[] and values_next loads)
+is RETIRED. The ΔV measurement shows substantially different system behavior
+when values[] is present vs absent, establishing that the two loads operate
+in different processor contexts. Using equal service distribution to derive
+DRAM_LAT from the combined workload is not admissible.
+
+### OC-BR-1 — 4X BR_PTI Discrepancy (OPEN)
+
+Assembly predicts BR_PTI = (B_asm / I_asm) × 1000 = (2/9) × 1000 = 222.22
+for the chain-only hot loop regardless of N (same source relation, same protocol).
+
+Measured:
+  CAL-CHAIN-ONLY-2X (N=8,388,608):  BR_PTI = 222.6659  (departure: 0.45,  ~0.2%)
+  CAL-CHAIN-ONLY-4X (N=16,777,216): BR_PTI = 178.6806  (departure: 43.54, ~19.6%)
+
+The 2X measurement agrees with the assembly prediction within 0.2%.
+The 4X measurement departs by 19.6% from the same prediction.
+N changes between the two runs. The declared source relation (chain-only
+assembly) and protocol (light, 10w/100t) are fixed.
+
+This is a sharply bounded observation: the same assembled loop at the same
+protocol produces BR_PTI values that agree with assembly at 2X and depart
+substantially at 4X. No mechanism is declared.
+
+The 4X measurement is not used in any derivation until OC-BR-1 is resolved.
+
+OC-BR-1: OPEN.
+
+### OC-DRAM-1a disposition
+
+OC-DRAM-1a: OPEN.
+The ΔV intervention substantially advanced understanding but did not close
+DRAM_LAT as a unique quantity. The following remain undeclared:
+  - Connection between STLI_OTHER and CPI in chain-only (OC-STLI-1, OPEN)
+  - 4X BR_PTI departure from assembly prediction (OC-BR-1, OPEN)
+  - L1_DC_ACCESSES PTI counter-to-instruction mapping (OC-DC-1, OPEN)
+  - Mechanism for CPI direction reversal across N in chain-only
+  - Whether chain[] service distribution = DRAM at these N values
+  - DRAM_LAT as a unique measurable quantity
+
+OC-STLI-1: OPEN.
+  Determine the relation between STLI_OTHER PTI, the chain-only
+  compiled instruction sequence, and observed CPI.
+  Required before any additive STLI contribution is assigned.
+
+OC-BR-1: OPEN.
+  BR_PTI(chain-only, 4X) = 178.68 departs from assembly prediction 222.22
+  by ~19.6%. BR_PTI(chain-only, 2X) = 222.67 agrees within 0.2%.
+  N is the only declared change between the two measurements.
+  4X measurement excluded from derivations until resolved.
+
+OC-DC-1: OPEN.
+  L1_DC_ACCESSES PTI measured at 468–511 for chained+values, above the
+  static-ratio prediction of 333.3 (5 ops/15 instr × 1000).
+  Counter-to-instruction mapping is undeclared.
+

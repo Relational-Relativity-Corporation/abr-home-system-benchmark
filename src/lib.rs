@@ -58,3 +58,5 @@ pub mod binary_baselines;
 pub mod complexity_crossover;
 pub mod cache_latency_model;
 pub mod transition_gradient;
+
+pub mod substrate_model;

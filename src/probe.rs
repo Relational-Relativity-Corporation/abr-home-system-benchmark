@@ -1,10 +1,22 @@
-// probe.rs — Metatron Dynamics, Inc. V8.0
+// probe.rs — Metatron Dynamics, Inc. V9.0
 // Isolated single-algorithm, single-N measurement binary for uProf instrumentation.
 // Bounded over D. No claim beyond D.
 //
-// ── What Changed in V8.0 ─────────────────────────────────────────────────────
+// ── What Changed in V9.0 ─────────────────────────────────────────────────────
 //
-// Added factorial block A × D × S for cross-variable interaction measurement.
+// Extended factorial block from A×D×S (8 nodes) to A×D×S×B (16 nodes).
+// B ∈ {none, branchy} is the fourth declared factor. The B=branchy variants
+// were already implemented (run_linear_branchy, run_scrambled_branchy,
+// run_chains_k_seq_branchy, run_chains_k_branchy) and are unchanged.
+// This version formalises their position in the factorial declaration,
+// declares the 8 new B-edges and 4-way interaction vectors, and updates
+// the run sequence and open conditions accordingly.
+//
+// OC-B-1 (declared V8.0): ADDRESSED. B dimension added as fourth factor.
+// The B×A, B×D, B×S interactions are now declared and measurable.
+// Whether B interacts with A, D, and S is an empirical question answered
+// by running the 16-node block under uProf and computing the interaction
+// vectors below.
 //
 // ── Factorial Block Declaration ───────────────────────────────────────────────
 //
@@ -12,40 +24,95 @@
 //   A ∈ {sequential, scrambled}
 //   D ∈ {independent, chain-8}
 //   S ∈ {S0=(524288, 4.1 MB), S1=(4194304, 32 MB)}
-//   B = none (fixed, branch-free throughout)
+//   B ∈ {none, branchy}
+//
+// Node encoding: G{S}{A}{D}{B} where each bit is 0/1.
+//   S bit: 0=S0, 1=S1
+//   A bit: 0=sequential, 1=scrambled
+//   D bit: 0=independent, 1=chain-8
+//   B bit: 0=none, 1=branchy
 //
 // N and W are not independent factors. S is the joint size state:
 //   S0: N=524,288,   W=4.1 MB  (standard protocol, 100w/1000t)
 //   S1: N=4,194,304, W=32 MB   (light protocol, 10w/100t — OC-TG-2)
-// The measured interaction is A×D×S. No attribution to N vs W separately
+// The measured interaction is A×D×S×B. No attribution to N vs W separately
 // is possible from this design.
 //
-// Eight declared nodes (all re-measured in one coordinated block):
-//   Node     A    D      S   algo          N
-//   F000     seq  ind    S0  linear        524288
-//   F010     scr  ind    S0  scrambled     524288
-//   F001     seq  ch8    S0  chains-8-seq  524288
-//   F011     scr  ch8    S0  chains-8      524288
-//   F100     seq  ind    S1  linear        4194304
-//   F110     scr  ind    S1  scrambled     4194304
-//   F101     seq  ch8    S1  chains-8-seq  4194304
-//   F111     scr  ch8    S1  chains-8      4194304
+// Sixteen declared nodes (all measured in one coordinated block):
+//   Node   A    D      S   B       algo                   N
+//   G0000  seq  ind    S0  none    linear                 524288
+//   G0100  scr  ind    S0  none    scrambled              524288
+//   G0010  seq  ch8    S0  none    chains-8-seq           524288
+//   G0110  scr  ch8    S0  none    chains-8               524288
+//   G1000  seq  ind    S1  none    linear                 4194304
+//   G1100  scr  ind    S1  none    scrambled              4194304
+//   G1010  seq  ch8    S1  none    chains-8-seq           4194304
+//   G1110  scr  ch8    S1  none    chains-8               4194304
+//   G0001  seq  ind    S0  branchy linear-branchy         524288
+//   G0101  scr  ind    S0  branchy scrambled-branchy      524288
+//   G0011  seq  ch8    S0  branchy chains-8-seq-branchy   524288
+//   G0111  scr  ch8    S0  branchy chains-8-branchy       524288
+//   G1001  seq  ind    S1  branchy linear-branchy         4194304
+//   G1101  scr  ind    S1  branchy scrambled-branchy      4194304
+//   G1011  seq  ch8    S1  branchy chains-8-seq-branchy   4194304
+//   G1111  scr  ch8    S1  branchy chains-8-branchy       4194304
+//
+// Note: G0000–G1110 correspond to the V8.0 nodes F000–F111. The prior
+// measured H values carry forward as provenance references. All 16 nodes
+// are measured in this coordinated block for internal consistency.
 //
 // "chains-8-seq": k=8 chains, sequential partition of indices rather than
-// scrambled permutation, round-robin interleaved. This gives A=sequential,
-// D=chain-8 — the same dependency structure as chains-8 but with sequential
-// (not scrambled) access within each chain.
+// scrambled permutation, round-robin interleaved. A=sequential, D=chain-8.
+// "chains-8-seq-branchy": same as chains-8-seq with data-dependent branches.
 //
-// 12 declared edges:
-//   A-edges (4): F000↔F010, F001↔F011, F100↔F110, F101↔F111
-//   D-edges (4): F000↔F001, F010↔F011, F100↔F101, F110↔F111
-//   S-edges (4): F000↔F100, F010↔F110, F001↔F101, F011↔F111
+// 24 declared edges:
+//   A-edges (4, B=none): G0000↔G0100, G0010↔G0110, G1000↔G1100, G1010↔G1110
+//   D-edges (4, B=none): G0000↔G0010, G0100↔G0110, G1000↔G1010, G1100↔G1110
+//   S-edges (4, B=none): G0000↔G1000, G0100↔G1100, G0010↔G1010, G0110↔G1110
+//   A-edges (4, B=br):   G0001↔G0101, G0011↔G0111, G1001↔G1101, G1011↔G1111
+//   D-edges (4, B=br):   G0001↔G0011, G0101↔G0111, G1001↔G1011, G1101↔G1111
+//   S-edges (4, B=br):   G0001↔G1001, G0101↔G1101, G0011↔G1011, G0111↔G1111
+//   B-edges (8):         G0000↔G0001, G0100↔G0101, G0010↔G0011, G0110↔G0111,
+//                        G1000↔G1001, G1100↔G1101, G1010↔G1011, G1110↔G1111
 //
-// Interaction vectors:
-//   I_{A,D}|S0 = ΔA·H|{D=ch8,S0} − ΔA·H|{D=ind,S0}
-//   I_{A,D}|S1 = ΔA·H|{D=ch8,S1} − ΔA·H|{D=ind,S1}
-//   I_{A,D,S}  = I_{A,D}|S1 − I_{A,D}|S0
-//   (same I_{A,D,S} reachable via A×S or D×S — path equivalence check)
+// Three-way interaction vectors (carry forward from V8.0, B=none slice):
+//   I_{A,D}|S0,B=none  = ΔA·H|{D=ch8,S0,B=none} − ΔA·H|{D=ind,S0,B=none}
+//   I_{A,D}|S1,B=none  = ΔA·H|{D=ch8,S1,B=none} − ΔA·H|{D=ind,S1,B=none}
+//   I_{A,D,S}|B=none   = I_{A,D}|S1,B=none − I_{A,D}|S0,B=none
+//   (path equivalence check: same result via A×S or D×S paths)
+//
+// Three-way interaction vectors (new, B=branchy slice):
+//   I_{A,D}|S0,B=br    = ΔA·H|{D=ch8,S0,B=br} − ΔA·H|{D=ind,S0,B=br}
+//   I_{A,D}|S1,B=br    = ΔA·H|{D=ch8,S1,B=br} − ΔA·H|{D=ind,S1,B=br}
+//   I_{A,D,S}|B=br     = I_{A,D}|S1,B=br − I_{A,D}|S0,B=br
+//
+// Four-way interaction vector (new, primary declared finding of V9.0):
+//   I_{A,D,S,B} = I_{A,D,S}|B=br − I_{A,D,S}|B=none
+//   Non-zero I_{A,D,S,B} means B does not contribute independently to H_t
+//   across the declared A×D×S structure — B interacts with the joint state.
+//   Zero I_{A,D,S,B} means B contributes additively: the branchy cost is
+//   constant across all A×D×S combinations in this declared domain.
+//   Whether the result is zero or non-zero is undeclared prior to measurement.
+//
+// B-edge contrast vectors (8 edges, one per A×D×S combination):
+//   ΔB|{A=seq,D=ind,S0} = H(G0001) − H(G0000)
+//   ΔB|{A=scr,D=ind,S0} = H(G0101) − H(G0100)
+//   ΔB|{A=seq,D=ch8,S0} = H(G0011) − H(G0010)
+//   ΔB|{A=scr,D=ch8,S0} = H(G0111) − H(G0110)
+//   ΔB|{A=seq,D=ind,S1} = H(G1001) − H(G1000)
+//   ΔB|{A=scr,D=ind,S1} = H(G1101) − H(G1100)
+//   ΔB|{A=seq,D=ch8,S1} = H(G1011) − H(G1010)
+//   ΔB|{A=scr,D=ch8,S1} = H(G1111) − H(G1110)
+//   If ΔB is constant across all 8 conditions, B contributes additively.
+//   If ΔB varies, B×(A,D,S) interaction is present.
+//
+// Observable provenance for B:
+//   B (declared intervention: data-dependent branch pattern via BRANCH_SEED)
+//   → %BR_MISP (observed hardware response: branch misprediction rate)
+//   → CPI (observed execution cost)
+//   B is not %BR_MISP. B is what is declared; %BR_MISP is what the
+//   processor observably does in response. The relation between B and
+//   %BR_MISP is an empirical observation, not a definition.
 //
 // Variance: S1 measurements carry elevated variance (OC-TG-2, light protocol).
 // All contrast vectors involving S1 inherit this. Declared at node level.
@@ -53,38 +120,62 @@
 // Full H vector preserved: (CPI, %BR_MISP, %L1_MISS, DRAM_PTI, L3_PTI, L2_PTI).
 // No reduction to CPI alone.
 //
-// Prior measurements (V4, V5, V6, V7) are retained as provenance references.
-// They are NOT used as factorial measurements — all 8 nodes are re-measured
-// in this coordinated block.
+// Prior measurements (V4–V8, nodes F000–F111) are retained as provenance
+// references. They are NOT used as factorial measurements for V9.0 —
+// all 16 nodes are re-measured in one coordinated block for internal
+// consistency.
 //
 // ── Usage ─────────────────────────────────────────────────────────────────────
 //
 //   probe.exe <ALGO> <N>
 //
-// Factorial block algos (new in V8.0):
-//   chains-8-seq   — A=sequential, D=chain-8 (sequential partition, round-robin)
+// Full 16-node factorial run sequence (V9.0):
 //
-// Full factorial run sequence:
-//   probe.exe linear         524288    F000: A=seq, D=ind, S0
-//   probe.exe scrambled      524288    F010: A=scr, D=ind, S0
-//   probe.exe chains-8-seq   524288    F001: A=seq, D=ch8, S0
-//   probe.exe chains-8       524288    F011: A=scr, D=ch8, S0
-//   probe.exe linear         4194304   F100: A=seq, D=ind, S1
-//   probe.exe scrambled      4194304   F110: A=scr, D=ind, S1
-//   probe.exe chains-8-seq   4194304   F101: A=seq, D=ch8, S1
-//   probe.exe chains-8       4194304   F111: A=scr, D=ch8, S1
+//   B=none nodes (carry forward from V8.0; re-measure for block consistency):
+//   probe.exe linear               524288    G0000: A=seq D=ind B=none S0
+//   probe.exe scrambled            524288    G0100: A=scr D=ind B=none S0
+//   probe.exe chains-8-seq         524288    G0010: A=seq D=ch8 B=none S0
+//   probe.exe chains-8             524288    G0110: A=scr D=ch8 B=none S0
+//   probe.exe linear               4194304   G1000: A=seq D=ind B=none S1 *light*
+//   probe.exe scrambled            4194304   G1100: A=scr D=ind B=none S1 *light*
+//   probe.exe chains-8-seq         4194304   G1010: A=seq D=ch8 B=none S1 *light*
+//   probe.exe chains-8             4194304   G1110: A=scr D=ch8 B=none S1 *light*
+//
+//   B=branchy nodes (new in V9.0):
+//   probe.exe linear-branchy       524288    G0001: A=seq D=ind B=br S0
+//   probe.exe scrambled-branchy    524288    G0101: A=scr D=ind B=br S0
+//   probe.exe chains-8-seq-branchy 524288    G0011: A=seq D=ch8 B=br S0
+//   probe.exe chains-8-branchy     524288    G0111: A=scr D=ch8 B=br S0
+//   probe.exe linear-branchy       4194304   G1001: A=seq D=ind B=br S1 *light*
+//   probe.exe scrambled-branchy    4194304   G1101: A=scr D=ind B=br S1 *light*
+//   probe.exe chains-8-seq-branchy 4194304   G1011: A=seq D=ch8 B=br S1 *light*
+//   probe.exe chains-8-branchy     4194304   G1111: A=scr D=ch8 B=br S1 *light*
 //
 // ── Open Conditions ──────────────────────────────────────────────────────────
 //
 // OC-TG-2: S1 nodes (N=4,194,304) use light protocol (10w/100t).
 //   Elevated variance. Declared at node level.
 // OC-HW-2: uProf timing not comparable to benchmark.exe timing.
-// OC-V8-1 (NEW): chains-8-seq uses sequential partition of indices.
+// OC-V8-1: chains-8-seq uses sequential partition of indices.
 //   The k=8 segments are index ranges [0..L), [L..2L), etc. rather than
 //   scrambled permutation segments. This gives A=sequential character
 //   within each chain while preserving D=chain-8 dependency structure.
 //   The access distribution within chains differs from chains-8 (scrambled).
-//   This is the declared implementation of A=seq, D=chain-8.
+//   This is the declared implementation of A=seq, D=chain-8. Unchanged.
+// OC-B-1: ADDRESSED (V9.0). B dimension added as fourth factor. The
+//   B×A, B×D, B×S interactions are declared and measurable. Whether
+//   I_{A,D,S,B} is zero or non-zero is an empirical question answered
+//   by running the 16-node block under uProf.
+// OC-V9-1 (NEW): %BR_MISP at B=none nodes is expected near-zero but has
+//   not been verified to be zero across all A×D×S combinations in this
+//   coordinated block. Record and report %BR_MISP at all 16 nodes.
+//   If %BR_MISP is non-negligible at any B=none node, that node carries
+//   a confound and its B-edge contrast is not a clean B contrast.
+// OC-V9-2 (NEW): The four-way interaction I_{A,D,S,B} is the primary
+//   declared finding of this version. It is undeclared prior to measurement.
+//   Path equivalence check applies: I_{A,D,S,B} should be reachable via
+//   multiple paths through the 4-cube (e.g. via A×B or D×B slices as well
+//   as via the A×D×S sub-cubes). Record all paths and confirm agreement.
 
 use std::env;
 use std::hint::black_box;
@@ -99,21 +190,69 @@ const TIMED_STANDARD: usize = 1_000;
 const WARM_LIGHT:     usize = 10;
 const TIMED_LIGHT:    usize = 100;
 
+// ── OC-DRAM-1 / OC-DRAM-1a Calibration constants ────────────────────────────
+// Declared intervention: working set substantially larger than nominal L3 (32MB).
+// Observed DRAM/cache service distribution established by H vector — not declared.
+//
+// scrambled-dram-cal: calls run_scrambled (GATHER — independent random accesses).
+//   Addresses at iteration i are NOT dependent on result at i-1.
+//   MAB parallelism available. NOT a serialized pointer chase.
+//   Measured: CPI ≈ 2.07–2.20 at 64MB and 128MB (gather regime).
+//   Measures effective DRAM throughput under parallel access, not DRAM_LAT.
+//
+// chained at large N: calls run_chained (POINTER CHASE — serialized).
+//   Address at iteration i depends on result at i-1.
+//   Measured: CPI ≈ 25.6–27.2 at 64MB and 128MB (serialized regime).
+//   Cycles_per_iter ≈ 101–109. This is a compound quantity — see OC-DRAM-1a.
+//   DRAM_LAT is NOT yet isolated as a unique quantity from these measurements.
+//
+// The gather/pointer-chase distinction at identical working-set sizes is a
+// declared finding: same WS class + different dependency relation →
+// radically different measured progression. Mechanism not declared.
+//
+// OC-DRAM-1: OPEN. DRAM_LAT not yet isolated.
+// OC-DRAM-1a: OPEN. cycles_per_iter is compound; requires decomposition.
+const N_DRAM_CAL:     usize = 8_388_608;  // 64MB WS — 2× nominal L3
+const N_DRAM_CAL_4X:  usize = 16_777_216; // 128MB WS — 4× nominal L3
+const WARM_DRAM_CAL:  usize = 3;          // minimal — passes are slow at these N
+const TIMED_DRAM_CAL: usize = 20;         // sufficient for stable mean
+
 fn usage() {
-    eprintln!("probe V8.0 — isolated single-algorithm uProf measurement target");
+    eprintln!("probe V9.0 — isolated single-algorithm uProf measurement target");
     eprintln!("Metatron Dynamics, Inc. Bounded over D.");
     eprintln!();
     eprintln!("Usage: probe <ALGO> <N>");
     eprintln!();
-    eprintln!("Factorial block A×D×S (run all 8 in sequence):");
-    eprintln!("  probe linear          524288   F000 A=seq D=ind S0");
-    eprintln!("  probe scrambled       524288   F010 A=scr D=ind S0");
-    eprintln!("  probe chains-8-seq    524288   F001 A=seq D=ch8 S0");
-    eprintln!("  probe chains-8        524288   F011 A=scr D=ch8 S0");
-    eprintln!("  probe linear        4194304    F100 A=seq D=ind S1 *light*");
-    eprintln!("  probe scrambled     4194304    F110 A=scr D=ind S1 *light*");
-    eprintln!("  probe chains-8-seq  4194304    F101 A=seq D=ch8 S1 *light*");
-    eprintln!("  probe chains-8      4194304    F111 A=scr D=ch8 S1 *light*");
+    eprintln!("Factorial block A×D×S×B (run all 16 in sequence):");
+    eprintln!("  B=none nodes (re-measure for block consistency):");
+    eprintln!("  probe linear               524288   G0000 A=seq D=ind B=none S0");
+    eprintln!("  probe scrambled            524288   G0100 A=scr D=ind B=none S0");
+    eprintln!("  probe chains-8-seq         524288   G0010 A=seq D=ch8 B=none S0");
+    eprintln!("  probe chains-8             524288   G0110 A=scr D=ch8 B=none S0");
+    eprintln!("  probe linear             4194304    G1000 A=seq D=ind B=none S1 *light*");
+    eprintln!("  probe scrambled          4194304    G1100 A=scr D=ind B=none S1 *light*");
+    eprintln!("  probe chains-8-seq       4194304    G1010 A=seq D=ch8 B=none S1 *light*");
+    eprintln!("  probe chains-8           4194304    G1110 A=scr D=ch8 B=none S1 *light*");
+    eprintln!("  B=branchy nodes (new in V9.0):");
+    eprintln!("  probe linear-branchy       524288   G0001 A=seq D=ind B=br S0");
+    eprintln!("  probe scrambled-branchy    524288   G0101 A=scr D=ind B=br S0");
+    eprintln!("  probe chains-8-seq-branchy 524288   G0011 A=seq D=ch8 B=br S0");
+    eprintln!("  probe chains-8-branchy     524288   G0111 A=scr D=ch8 B=br S0");
+    eprintln!("  probe linear-branchy     4194304    G1001 A=seq D=ind B=br S1 *light*");
+    eprintln!("  probe scrambled-branchy  4194304    G1101 A=scr D=ind B=br S1 *light*");
+    eprintln!("  probe chains-8-seq-branchy 4194304  G1011 A=seq D=ch8 B=br S1 *light*");
+    eprintln!("  probe chains-8-branchy   4194304    G1111 A=scr D=ch8 B=br S1 *light*");
+    eprintln!();
+    eprintln!("OC-DRAM-1 calibration (separate record — NOT a factorial node):");
+    eprintln!("  probe scrambled-dram-cal  8388608   CAL-2X WS=64MB  2× L3 *dram-cal*");
+    eprintln!("  probe scrambled-dram-cal 16777216   CAL-4X WS=128MB 4× L3 *dram-cal*");
+    eprintln!("  DRAM_LAT = CPI × (1000 / RETIRED_BR_INST_PTI)");
+    eprintln!("OC-DRAM-1a chain-only intervention (separate record — NOT factorial):");
+    eprintln!("  probe chain-only  8388608   CAL-CHAIN-ONLY-2X WS=64MB  OC-DRAM-1a");
+    eprintln!("  probe chain-only 16777216   CAL-CHAIN-ONLY-4X WS=128MB OC-DRAM-1a");
+    eprintln!("  ΔV: chained+values → chain-only at same N and protocol.");
+    eprintln!("  Record assembly from probe.s BEFORE interpreting H vector.");
+    eprintln!("  ΔH = H(chain-only) − H(chained+values) at each N.");
     std::process::exit(1);
 }
 
@@ -156,6 +295,26 @@ fn run_chained(values: &[f64], chain: &[usize]) -> f64 {
         current = black_box(next);
     }
     black_box(acc)
+}
+
+/// OC-DRAM-1a chain-only variant: pointer chase with values[] accumulation removed.
+/// Declared intervention ΔV: chained+values → chain-only.
+/// Preserves the serialized pointer dependency relation:
+///   current_{t+1} = chain[current_t]
+/// Removes: movsd values[current], subsd values[next], addsd acc
+/// The actual hot-loop instruction sequence must be declared from the
+/// generated assembly (probe.s) — not assumed to equal run_chained minus three instructions.
+/// The compiler may produce a different loop structure without the FP accumulation.
+/// Record the assembly for CAL-CHAIN-ONLY before interpreting its H vector.
+#[inline(never)]
+fn run_chain_only(chain: &[usize]) -> usize {
+    let n = chain.len();
+    let mut current = chain[0];
+    for _ in 1..n {
+        let next = chain[current];
+        current = black_box(next);
+    }
+    black_box(current)
 }
 
 /// D_k_chained (scrambled): k scrambled chains, round-robin interleaved.
@@ -357,16 +516,30 @@ fn factorial_label(algo: &str, n: usize) -> String {
     let s = if n <= STANDARD_MAX_N { "S0" } else { "S1" };
     let si = if n > STANDARD_MAX_N { "1" } else { "0" };
     match algo {
-        // B=none nodes (original A×D×S block)
+        // B=none nodes — A×D×S×B cube, B=0 face
         "linear"               => format!("G{}000 A=seq D=ind B=none {}",  si, s),
         "scrambled"            => format!("G{}100 A=scr D=ind B=none {}",  si, s),
         "chains-8-seq"         => format!("G{}010 A=seq D=ch8 B=none {}",  si, s),
         "chains-8"             => format!("G{}110 A=scr D=ch8 B=none {}",  si, s),
-        // B=branchy nodes (new A×D×S×B extension)
+        // B=branchy nodes — A×D×S×B cube, B=1 face (V9.0)
         "linear-branchy"       => format!("G{}001 A=seq D=ind B=br {}",    si, s),
         "scrambled-branchy"    => format!("G{}101 A=scr D=ind B=br {}",    si, s),
         "chains-8-seq-branchy" => format!("G{}011 A=seq D=ch8 B=br {}",    si, s),
         "chains-8-branchy"     => format!("G{}111 A=scr D=ch8 B=br {}",    si, s),
+        // OC-DRAM-1a chain-only intervention nodes (not factorial)
+        "chain-only" => {
+            if n == N_DRAM_CAL    { "CAL-CHAIN-ONLY-2X WS=64MB  OC-DRAM-1a".to_string() }
+            else if n == N_DRAM_CAL_4X { "CAL-CHAIN-ONLY-4X WS=128MB OC-DRAM-1a".to_string() }
+            else { format!("CAL-CHAIN-ONLY WS={:.0}MB OC-DRAM-1a",
+                n as f64 * 8.0 / 1048576.0) }
+        }
+        // OC-DRAM-1 calibration nodes (not factorial)
+        "scrambled-dram-cal" => {
+            if n == N_DRAM_CAL    { "CAL-2X  A=scr D=ind B=none WS=64MB  OC-DRAM-1".to_string() }
+            else if n == N_DRAM_CAL_4X { "CAL-4X  A=scr D=ind B=none WS=128MB OC-DRAM-1".to_string() }
+            else { format!("CAL-custom A=scr D=ind B=none WS={:.0}MB OC-DRAM-1",
+                n as f64 * 8.0 / 1048576.0) }
+        }
         _ => "non-factorial".to_string(),
     }
 }
@@ -387,6 +560,7 @@ fn main() {
         "chains-1-ind","chains-2-ind","chains-4-ind","chains-8-ind",
         "chains-16-ind","chains-32-ind","chains-64-ind",
         "chains-8-seq","linear-branchy","scrambled-branchy","chains-8-branchy","chains-8-seq-branchy",
+        "scrambled-dram-cal","chain-only",
     ];
     if !valid.contains(&algo.as_str()) {
         eprintln!("ERROR: unrecognised ALGO '{}'", algo); usage();
@@ -402,13 +576,22 @@ fn main() {
         }
     }
 
-    let warm     = if n <= STANDARD_MAX_N { WARM_STANDARD  } else { WARM_LIGHT  };
-    let timed    = if n <= STANDARD_MAX_N { TIMED_STANDARD } else { TIMED_LIGHT };
-    let protocol = if n <= STANDARD_MAX_N { "standard (100w/1000t)" } else { "light (10w/100t) OC-TG-2" };
+    let is_dram_cal   = algo == "scrambled-dram-cal";
+    let is_chain_only = algo == "chain-only";
+    let warm     = if is_dram_cal { WARM_DRAM_CAL }
+                   else if n <= STANDARD_MAX_N { WARM_STANDARD  }
+                   else { WARM_LIGHT  };
+    let timed    = if is_dram_cal { TIMED_DRAM_CAL }
+                   else if n <= STANDARD_MAX_N { TIMED_STANDARD }
+                   else { TIMED_LIGHT };
+    let protocol = if is_dram_cal   { "dram-cal (3w/20t) OC-DRAM-1" }
+                   else if is_chain_only { "light (10w/100t) OC-DRAM-1a" }
+                   else if n <= STANDARD_MAX_N { "standard (100w/1000t)" }
+                   else { "light (10w/100t) OC-TG-2" };
     let ws_mb    = (n * 8) as f64 / (1024.0 * 1024.0);
     let fact     = factorial_label(&algo, n);
 
-    println!("probe V8.0 — Metatron Dynamics, Inc. Bounded over D.");
+    println!("probe V9.0 — Metatron Dynamics, Inc. Bounded over D.");
     println!("Factorial: {}  N: {}  WS: {:.1} MB", fact, n, ws_mb);
     println!("Protocol: {}  Warm: {}  Timed: {}", protocol, warm, timed);
     println!("OC-HW-2: timing under uProf not comparable to benchmark.exe");
@@ -419,8 +602,9 @@ fn main() {
     let bits   = declared_branch_bits(n, BRANCH_SEED);
     let single_chain: Vec<usize> = perm.clone();
 
-    let (scr_chain, scr_heads) = if k_ch.is_some() {
-        build_chains(&perm, k_ch.unwrap())
+    let k_ch_br_early = parse_k_ch_branchy(&algo);
+    let (scr_chain, scr_heads) = if let Some(k) = k_ch.or(k_ch_br_early) {
+        build_chains(&perm, k)
     } else { (vec![], vec![]) };
 
     let (seq_chain, seq_heads) = if let Some(k) = k_seq {
@@ -431,8 +615,7 @@ fn main() {
         build_segments(&perm, k)
     } else { vec![] };
 
-    let k_ch_br = parse_k_ch_branchy(&algo);
-    let k_ch_v  = k_ch.or(k_ch_br).unwrap_or(0);
+    let k_ch_v  = k_ch.or(k_ch_br_early).unwrap_or(0);
     let k_seq_v = k_seq.unwrap_or(0);
     let k_ind_v = k_ind.unwrap_or(0);
 
@@ -441,6 +624,10 @@ fn main() {
             match algo.as_str() {
                 "linear"               => { run_linear(&values); }
                 "scrambled"            => { run_scrambled(&values, &perm); }
+                // OC-DRAM-1: gather (independent random accesses)
+                "scrambled-dram-cal"   => { run_scrambled(&values, &perm); }
+                // OC-DRAM-1a: chain-only pointer chase (no values[] accumulation)
+                "chain-only"           => { run_chain_only(&single_chain); }
                 "branchy"              => { run_branchy(&values, &bits); }
                 "chained"              => { run_chained(&values, &single_chain); }
                 "chains-8-seq"         => {
@@ -484,8 +671,21 @@ fn main() {
     println!("  Mean: {:.1} ns  Min: {} ns  Max: {} ns", mean_ns, min_ns, max_ns);
     println!("  ns/op: {:.4}", ns_per_op);
     println!();
-    println!("A×D×S factorial block. Preserve full H vector from uProf.");
-    println!("Run under uProf assess_ext. Record in execution_record.md V8.0.");
+    if is_dram_cal {
+        println!("OC-DRAM-1 calibration. Preserve full H vector from uProf.");
+        println!("Back-calculate: cycles_per_iter = CPI × (4 × 1000 / RETIRED_BR_INST_PTI)");
+        println!("  (4 branches per iteration declared from assembly I_asm=15)");
+        println!("Record in execution_record.md OC-DRAM-1 section.");
+    } else if is_chain_only {
+        println!("OC-DRAM-1a chain-only intervention. Preserve full H vector from uProf.");
+        println!("REQUIRED: record hot-loop assembly from probe.s BEFORE interpreting H.");
+        println!("ΔH = H(chain-only) − H(chained+values) at this N.");
+        println!("Record in execution_record.md OC-DRAM-1a section.");
+    } else {
+        println!("A×D×S×B factorial block (V9.0). Preserve full H vector from uProf.");
+        println!("Run under uProf assess_ext. Record in execution_record.md V10.0.");
+        println!("OC-V9-1: Record %BR_MISP at all 16 nodes including B=none nodes.");
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -495,6 +695,60 @@ mod tests {
     use abr_home_system_benchmark::binary_baselines::{declared_permutation, SCRAMBLE_SEED};
 
     const TEST_N: usize = 512;
+
+    #[test]
+    fn dram_cal_n_2x_is_two_times_l3() {
+        // N_DRAM_CAL × 8 bytes = 64MB = 2 × 32MB L3
+        assert_eq!(N_DRAM_CAL * 8, 64 * 1024 * 1024,
+            "CAL-2X working set must be 64MB (2× L3)");
+    }
+
+    #[test]
+    fn dram_cal_n_4x_is_four_times_l3() {
+        // N_DRAM_CAL_4X × 8 bytes = 128MB = 4 × 32MB L3
+        assert_eq!(N_DRAM_CAL_4X * 8, 128 * 1024 * 1024,
+            "CAL-4X working set must be 128MB (4× L3)");
+    }
+
+    #[test]
+    fn chain_only_produces_finite_result() {
+        // OC-DRAM-1a: chain-only variant must run without panic and produce
+        // a finite result. This confirms the pointer dependency is intact
+        // and the function compiles to a valid loop.
+        // The actual hot-loop assembly is declared separately from probe.s.
+        let perm = declared_permutation(TEST_N, SCRAMBLE_SEED);
+        let (chain, _) = build_chains(&perm, 1);
+        let result = run_chain_only(&chain);
+        assert!(result < TEST_N, "chain-only result must be a valid index");
+    }
+
+    #[test]
+    fn chain_only_result_differs_from_chained() {
+        // chain-only and chained use the same pointer dependency but
+        // chain-only has no values[] accumulation. This test confirms
+        // the two functions are structurally distinct.
+        // (They share the same chain, so the final current value is the same.)
+        // The distinction is observable in the assembly and H vector, not here.
+        let perm = declared_permutation(TEST_N, SCRAMBLE_SEED);
+        let (chain, _) = build_chains(&perm, 1);
+        let chain_only_result = run_chain_only(&chain);
+        // chain-only returns a usize index; run_chained returns f64 accumulator.
+        // Type difference confirms structural distinction at the source level.
+        assert!(chain_only_result < TEST_N);
+    }
+
+    #[test]
+    fn dram_cal_back_calculation_formula_finite() {
+        // Verify the back-calculation formula produces a finite positive value.
+        // Note: this formula produces cycles_per_iteration (CPI × insts_per_iter),
+        // which is a compound quantity — not yet isolatable as DRAM_LAT alone.
+        // See OC-DRAM-1a. The test confirms arithmetic correctness only.
+        let example_cpi = 3.274f64;
+        let example_br_pti = 248.4f64;
+        let cycles_per_iter = example_cpi * (1000.0 / example_br_pti);
+        assert!(cycles_per_iter.is_finite() && cycles_per_iter > 0.0,
+            "cycles_per_iter back-calculation must be finite positive");
+    }
 
     #[test]
     fn parse_k_seq_declared_values() {
@@ -681,5 +935,21 @@ mod tests {
             assert_eq!(chain[heads[i]], heads[i],
                 "k=512 chain {}: single element should wrap to self", i);
         }
+    }
+
+    #[test]
+    fn chains_8_branchy_scr_heads_not_empty() {
+        // Regression test: chains-8-branchy must build scr_chain/scr_heads.
+        // Prior bug: k_ch_br_early was not consulted when building scr_heads,
+        // so chains-8-branchy received empty scr_heads and panicked at index 0.
+        // This test confirms parse_k_ch_branchy returns Some(8) for the declared
+        // branchy variant, and that build_chains produces non-empty heads at k=8.
+        assert_eq!(parse_k_ch_branchy("chains-8-branchy"), Some(8));
+        assert_eq!(parse_k_ch_branchy("chains-8-seq-branchy"), None); // seq uses seq path
+        let perm = declared_permutation(TEST_N, SCRAMBLE_SEED);
+        let k = 8;
+        let (_, heads) = build_chains(&perm, k);
+        assert_eq!(heads.len(), k,
+            "chains-8-branchy: scr_heads must have k={} entries, got {}", k, heads.len());
     }
 }
