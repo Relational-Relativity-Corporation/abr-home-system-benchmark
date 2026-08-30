@@ -2289,3 +2289,99 @@ OC-DC-1: OPEN.
   static-ratio prediction of 333.3 (5 ops/15 instr × 1000).
   Counter-to-instruction mapping is undeclared.
 
+
+---
+
+## OC-STLI-1 — Assembly Analysis of Chain-Only STLF Structure (2026-08-30)
+
+### Assembly comparison: stack store/load recurrence
+
+Source: probe.s (release build). Both loops declared from assembly.
+
+**run_chained (.LBB10_3) stack recurrence:**
+```
+[iter i,   step 13] movq %r10, 32(%rsp)   STORE: next_i → stack (writes %r10)
+[iter i+1, step 1 ] movq 32(%rsp), %rax   LOAD:  stack → current_{i+1} (reads %rax)
+```
+Intervening instructions: #APP #NO_APP, cmpq %r11 %r9, jne — ~3 instructions.
+Register pattern: store writes %r10, load reads %rax — different registers.
+
+**run_chain_only (.LBB13_3) stack recurrence:**
+```
+[iter i,   step 6 ] movq %rax, 40(%rsp)   STORE: next_i → stack (writes %rax)
+[iter i+1, step 1 ] movq 40(%rsp), %rax   LOAD:  stack → current_{i+1} (reads %rax)
+```
+Intervening instructions: #APP #NO_APP, cmpq %r8 %rdx, jne — ~3 instructions.
+Register pattern: store writes %rax, load reads %rax — same register.
+
+The black_box(next) call in the Rust source forces the stack round-trip.
+Without it, the compiler would keep %rax in a register across iterations.
+This is declared from the Rust source (probe.rs run_chain_only).
+
+### Declared structural observations
+
+1. Both loops have the same fixed stack address across all iterations
+   and approximately the same instruction count (~3) between store and load.
+   The surface STLF structure is identical by these measures.
+
+2. The register pattern differs:
+   - run_chained:   store writes %r10, load reads %rax (different registers)
+   - run_chain_only: store writes %rax, load reads %rax (same register)
+   This is an assembly-level structural difference. What it implies for
+   processor behavior is not established from assembly alone.
+
+3. SOG §2.12 structural conditions present in chain_only:
+   - Fixed bits[11:0] at stack address (same address every iteration)
+   - ~3 intervening instructions between store and dependent load
+   - The chain load (step 5) has long memory latency (L3/DRAM)
+   - chain_only has fewer intervening instructions than chain+values
+     (chain+values has ~6 additional FP instructions between store and load)
+   These structural conditions are consistent with SOG §2.12's warning
+   about multiple stores to the same bits[11:0] address in-flight.
+   Whether they produce the observed STLI rise through that mechanism
+   is a candidate relation, not an established one.
+
+### What is NOT declared
+
+The following are processor-state propositions not established by assembly
+or H vector:
+  - Whether the OOO engine issues the next-iteration stack load speculatively
+  - Whether multiple store queue entries to 40(%rsp) are in flight simultaneously
+  - Whether STLF is attempted before store data is forwardable
+
+These describe internal processor behavior not observable under assess_ext.
+ROB occupancy and store queue state are both marked NONE in the PRL (PRL-Q).
+
+### CPI relation: critical path vs hidden
+
+Two admissible cases:
+
+Case A — STLI fires within the chain[] memory miss window:
+  The STLI penalty is absorbed by the existing memory stall.
+  STLI contribution to CPI ≈ 0.
+  chain_load_lat_estimate ≈ cycles_per_iter − overhead = 2.57 × 9 − 6 = 17.1 cycles
+
+Case B — STLI fires on the critical path:
+  STLI CPI contribution = (STLI_PTI/1000) × 13 cycles ≈ (75.807/1000) × 13 = 0.985
+  chain_load_lat_estimate ≈ (2.5743 − 0.985) × 9 − 6 = 8.3 cycles
+
+The two cases bracket chain_load_lat between approximately 8 and 17 cycles.
+Both bounds are admissible. The timing relation is not established.
+
+This bracket is the current declared state for chain_load_lat.
+DRAM_LAT is not isolatable until the bracket is resolved.
+
+### OC-STLI-1 disposition
+
+OC-STLI-1: OPEN.
+Candidate mechanism stated: the structural conditions for SOG §2.12
+STLF failure mode are present in chain_only and less present in
+chain+values. Whether these conditions produce the observed STLI rise
+is a candidate, not an established relation.
+The critical path vs hidden timing relation is undeclared.
+Required to close: store queue timing or ROB occupancy — neither
+observable under assess_ext (OC-STLI-1 is at the instrumentation boundary).
+
+chain_load_lat bracket: [8.3, 17.1] cycles (declared, not estimated).
+DRAM_LAT remains undeclared.
+
