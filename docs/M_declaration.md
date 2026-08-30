@@ -521,3 +521,120 @@ OC-RP-1: A_t is declared as a set. Its cardinality |A_t|, rate of
   (D_independent: wide; D_chained: narrow) have been declared.
   Intermediate dependency structures (partial chains, branching
   dependency graphs) are the declared next experimental space.
+
+---
+
+## V7.0 — ABR A Operator: Declared Experimental Graph and Contrast Field
+
+### Purpose
+
+The experimental graph maps declared measurement points to a relational
+structure. Each node is a fully declared (N, W, A, B, D) configuration
+with measured H = (CPI, DRAM_PTI, L3_PTI, L2_PTI, %BR_MISP). Edges
+connect configurations differing in exactly one declared variable.
+
+The A operator computes contrast across each edge:
+  A(H)[e] = H(target(e)) − H(source(e))
+
+This produces a contrast vector at each edge — not a scalar — preserving
+the full H structure. Non-uniform contrast across edges in the same
+dimension reveals interaction effects: where the effect of one variable
+depends on the state of another.
+
+### Declared Nodes (V7.0)
+
+| Label      | N       | W (MB) | A   | B       | D          | CPI   |
+|------------|---------|--------|-----|---------|------------|-------|
+| lin_pre    | 524,288 | 4.1    | seq | none    | ind        | 0.800 |
+| scr_pre    | 524,288 | 4.1    | scr | none    | ind        | 0.394 |
+| scr_on     | 2,097,152 | 16.0 | scr | none    | ind        | 1.178 |
+| scr_post   | 4,194,304 | 32.0 | scr | none    | ind        | 1.800 |
+| brn_pre    | 65,536  | 0.5    | seq | branchy | ind        | 0.558 |
+| brn_on     | 122,880 | 1.0    | seq | branchy | ind        | 1.422 |
+| brn_post   | 524,288 | 4.1    | seq | branchy | ind        | 1.663 |
+| d1         | 524,288 | 4.1    | scr | none    | chain-1    | 3.993 |
+| d2..d64    | 524,288 | 4.1    | scr | none    | chain-k    | ~1.00 |
+| d8_ind     | 524,288 | 4.1    | scr | none    | chain-8-nd | 1.009 |
+
+### Declared Edges and A Operator Values (ΔCPI)
+
+A dimension (access order):
+  lin_pre → scr_pre:  ΔCPI = −0.406  (A=seq→scr, W=4.1 MB, D=ind)
+
+B dimension (branch):
+  lin_pre_s → brn_pre: ΔCPI = −0.257  (B=none→branchy, W=0.5 MB, D=ind)
+
+W dimension (working set):
+  scr_pre → scr_on:   ΔCPI = +0.784  (A=scr, B=none, D=ind)
+  scr_on → scr_post:  ΔCPI = +0.622  (A=scr, B=none, D=ind)
+  brn_pre → brn_on:   ΔCPI = +0.864  (A=seq, B=branchy, D=ind)
+  brn_on → brn_post:  ΔCPI = +0.241  (A=seq, B=branchy, D=ind)
+
+D dimension (dependency structure):
+  scr_pre → d1:    ΔCPI = +3.599  (ind → chain-1)
+  d1 → d2:         ΔCPI = −2.991  (chain-1 → chain-2, large)
+  d2 → d4:         ΔCPI = +0.004  (chain-2 → chain-4, flat)
+  d4..d64:         ΔCPI ≈ 0.000   (flat throughout)
+  d8 → d8_ind:     ΔCPI = +0.009  (chain-8 → chain-8-no-dep, noise)
+  d8_ind → scr_pre: ΔCPI = −0.615 (chain-8-no-dep → full-ind, large)
+
+### Declared Relational Structure
+
+The A operator field is non-uniform — the contrast along D is not
+constant. The D dimension has a single large contrast at the
+chain-1→chain-2 edge (ΔCPI = −2.991), then near-zero contrast
+throughout chain-2 through chain-64, then a large contrast at the
+chain-8-nd→ind edge (ΔCPI = −0.615). This non-uniformity is a declared
+relational property of the experimental graph — not a scalar threshold.
+
+### Declared Gaps in the Graph (Undeclared Interactions)
+
+The following interaction edges are not yet declared:
+
+  D × W: No edge varies D at W=16 MB or W=32 MB. The D dimension
+    has been mapped only at W=4.1 MB. Whether the D contrast field
+    changes at larger W is undeclared.
+
+  A × D: No edge varies A while holding D=chain-k. The A dimension
+    has been mapped only at D=ind. Whether the A contrast changes
+    under chained access is undeclared.
+
+  B × W (large W): B confirmed at W=4.1 MB by uProf. Whether the
+    B contrast field changes at W=16 MB or W=32 MB is undeclared
+    by hardware counter measurement (timing only from gradient sweep).
+
+  D (segmentation) × W: OC-RP-3 addresses this — whether the
+    D_k/D_independent contrast tracks segment length L or W.
+
+These gaps define the declared next experimental space. Each undeclared
+edge represents a potential interaction that cannot be attributed or
+eliminated without measurement.
+
+### B Operator Application (declared, not yet computed)
+
+The B operator propagates contrast relations through the graph:
+  B(A(H))[e] = A(H)[e] + Σ_{f ∈ succ(e)} A(H)[f]
+
+Applied to the experimental graph, B would show which edges carry
+cumulative contrast from their successors — where upstream contrast
+propagates into downstream measurements. This is the declared next
+computation once the graph is more fully populated. Premature
+application with a sparse graph risks propagating noise rather
+than signal.
+
+### R Operator (declared, not yet computed)
+
+The R operator applies a relational field weighted by node connectivity:
+  R(A(H))[e] = A(H)[e] + ρ[src(e)] × (Σ_succ − Σ_pred)
+
+In the experimental graph, ρ[node] reflects how many declared edges
+connect to that node — its relational centrality. Nodes with many
+declared edges (e.g., scr_pre, d8) carry more weight than isolated
+nodes. This is the declared next operator once B is computed.
+
+### Provenance
+
+All node H values are declared-hardware measurements on Ryzen 5 7600X
+unless explicitly marked as sandbox. The A operator values are derived
+from declared measurements — they inherit the same provenance bounds.
+No claim is made beyond D.

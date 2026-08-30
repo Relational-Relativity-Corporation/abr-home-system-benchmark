@@ -1,82 +1,90 @@
-// probe.rs — Metatron Dynamics, Inc. V5.0
+// probe.rs — Metatron Dynamics, Inc. V8.0
 // Isolated single-algorithm, single-N measurement binary for uProf instrumentation.
 // Bounded over D. No claim beyond D.
 //
-// ── What Changed in V5.0 ─────────────────────────────────────────────────────
+// ── What Changed in V8.0 ─────────────────────────────────────────────────────
 //
-// Added D_CHAINED variant (algo: "chained") for OC-HW-5 intervention.
-// D promoted to first-class declared variable in R = {N, W, A, B, D, O_count}.
+// Added factorial block A × D × S for cross-variable interaction measurement.
 //
-// ── Purpose ───────────────────────────────────────────────────────────────────
+// ── Factorial Block Declaration ───────────────────────────────────────────────
 //
-// Runs EXACTLY ONE declared (algorithm, N) pair under uProf so that hardware
-// counter events are attributed to one algorithm only. Hardware state H is
-// declared as belonging to that pair.
+// Factors:
+//   A ∈ {sequential, scrambled}
+//   D ∈ {independent, chain-8}
+//   S ∈ {S0=(524288, 4.1 MB), S1=(4194304, 32 MB)}
+//   B = none (fixed, branch-free throughout)
+//
+// N and W are not independent factors. S is the joint size state:
+//   S0: N=524,288,   W=4.1 MB  (standard protocol, 100w/1000t)
+//   S1: N=4,194,304, W=32 MB   (light protocol, 10w/100t — OC-TG-2)
+// The measured interaction is A×D×S. No attribution to N vs W separately
+// is possible from this design.
+//
+// Eight declared nodes (all re-measured in one coordinated block):
+//   Node     A    D      S   algo          N
+//   F000     seq  ind    S0  linear        524288
+//   F010     scr  ind    S0  scrambled     524288
+//   F001     seq  ch8    S0  chains-8-seq  524288
+//   F011     scr  ch8    S0  chains-8      524288
+//   F100     seq  ind    S1  linear        4194304
+//   F110     scr  ind    S1  scrambled     4194304
+//   F101     seq  ch8    S1  chains-8-seq  4194304
+//   F111     scr  ch8    S1  chains-8      4194304
+//
+// "chains-8-seq": k=8 chains, sequential partition of indices rather than
+// scrambled permutation, round-robin interleaved. This gives A=sequential,
+// D=chain-8 — the same dependency structure as chains-8 but with sequential
+// (not scrambled) access within each chain.
+//
+// 12 declared edges:
+//   A-edges (4): F000↔F010, F001↔F011, F100↔F110, F101↔F111
+//   D-edges (4): F000↔F001, F010↔F011, F100↔F101, F110↔F111
+//   S-edges (4): F000↔F100, F010↔F110, F001↔F101, F011↔F111
+//
+// Interaction vectors:
+//   I_{A,D}|S0 = ΔA·H|{D=ch8,S0} − ΔA·H|{D=ind,S0}
+//   I_{A,D}|S1 = ΔA·H|{D=ch8,S1} − ΔA·H|{D=ind,S1}
+//   I_{A,D,S}  = I_{A,D}|S1 − I_{A,D}|S0
+//   (same I_{A,D,S} reachable via A×S or D×S — path equivalence check)
+//
+// Variance: S1 measurements carry elevated variance (OC-TG-2, light protocol).
+// All contrast vectors involving S1 inherit this. Declared at node level.
+//
+// Full H vector preserved: (CPI, %BR_MISP, %L1_MISS, DRAM_PTI, L3_PTI, L2_PTI).
+// No reduction to CPI alone.
+//
+// Prior measurements (V4, V5, V6, V7) are retained as provenance references.
+// They are NOT used as factorial measurements — all 8 nodes are re-measured
+// in this coordinated block.
 //
 // ── Usage ─────────────────────────────────────────────────────────────────────
 //
 //   probe.exe <ALGO> <N>
 //
-//   ALGO: linear | scrambled | branchy | chained
-//   N:    any positive integer (working set = N * 8 bytes)
+// Factorial block algos (new in V8.0):
+//   chains-8-seq   — A=sequential, D=chain-8 (sequential partition, round-robin)
 //
-// V4.0 declared measurement points (M_declaration.md V4.0):
-//   probe.exe linear    65536    B-pre  512 KB  control
-//   probe.exe branchy   65536    B-pre  512 KB  pre-transition
-//   probe.exe branchy   122880   B-on   960 KB  BRANCHY onset
-//   probe.exe branchy   524288   B-post 4.1 MB  BRANCHY plateau
-//   probe.exe linear    524288   S-pre  4.1 MB  control
-//   probe.exe scrambled 524288   S-pre  4.1 MB  pre-transition
-//   probe.exe scrambled 2097152  S-on   16 MB   SCRAMBLED onset
-//   probe.exe scrambled 4194304  S-post 32 MB   SCRAMBLED post
-//
-// OC-HW-5 intervention points (M_declaration.md V4.0, V5.0):
-//   probe.exe scrambled 524288   D_independent  A=scrambled, W=4.1 MB
-//   probe.exe chained   524288   D_chained      A=scrambled, W=4.1 MB
-//
-//   Comparison: same N, same W, same scrambled access distribution.
-//   Only D differs: independent loads vs data-dependent address chain.
-//
-// ── D_CHAINED declaration (OC-HW-5) ──────────────────────────────────────────
-//
-// D_independent (scrambled): address sequence a_t = perm[t] for each step t.
-//   Each address is computable without waiting for any prior result.
-//   Multiple loads can be outstanding concurrently.
-//
-// D_chained: address sequence a_{t+1} = f(x_{a_t}), where x_{a_t} is the
-//   value stored at the prior address. The next address does not exist as
-//   an actionable quantity until the preceding load completes and its value
-//   is returned. The declared dependency chain prevents the hardware from
-//   resolving a_{t+1} before x_{a_t} is available.
-//
-// Implementation: chain[] is a Vec<usize> where chain[i] = perm[i] — the
-//   same scrambled permutation as D_independent, but accessed as a pointer
-//   chain. Each step reads chain[current_idx] to get the next index.
-//   The read result IS the next address — enforcing a_{t+1} = f(x_{a_t}).
-//   values[] is accessed at each chain index for the arithmetic accumulation,
-//   keeping O_count and working set identical to D_independent.
-//
-// Same declared properties as scrambled:
-//   N, W, A (same permutation distribution), O_count — all equal.
-//   Only D differs.
-//
-// ── Timing Protocol ───────────────────────────────────────────────────────────
-//
-// N <= 524,288:  standard (100 warm / 1000 timed).
-// N >  524,288:  lighter  (10 warm  / 100  timed) — OC-TG-2.
-//
-// Under uProf timing is elevated — OC-HW-2. Declared output is H, not timing.
+// Full factorial run sequence:
+//   probe.exe linear         524288    F000: A=seq, D=ind, S0
+//   probe.exe scrambled      524288    F010: A=scr, D=ind, S0
+//   probe.exe chains-8-seq   524288    F001: A=seq, D=ch8, S0
+//   probe.exe chains-8       524288    F011: A=scr, D=ch8, S0
+//   probe.exe linear         4194304   F100: A=seq, D=ind, S1
+//   probe.exe scrambled      4194304   F110: A=scr, D=ind, S1
+//   probe.exe chains-8-seq   4194304   F101: A=seq, D=ch8, S1
+//   probe.exe chains-8       4194304   F111: A=scr, D=ch8, S1
 //
 // ── Open Conditions ──────────────────────────────────────────────────────────
 //
-// OC-HW-2: uProf instrumentation overhead. Timing not comparable to benchmark.
-// OC-HW-3: CLOSED. Zen 4 event names confirmed in V4.0 run.
-// OC-HW-4: Latency-hiding mechanism in D_independent State 1 — not yet
-//   established by counter set. OC-HW-5 intervention addresses this.
-// OC-HW-5: D_chained vs D_independent at N=524,288, W=4.1 MB. Prediction:
-//   D_chained CPI substantially higher than D_independent at same N/W.
-//   DRAM_PTI approximately equal (same working set). If confirmed, latency
-//   hiding through concurrent outstanding requests is the State 1 mechanism.
+// OC-TG-2: S1 nodes (N=4,194,304) use light protocol (10w/100t).
+//   Elevated variance. Declared at node level.
+// OC-HW-2: uProf timing not comparable to benchmark.exe timing.
+// OC-V8-1 (NEW): chains-8-seq uses sequential partition of indices.
+//   The k=8 segments are index ranges [0..L), [L..2L), etc. rather than
+//   scrambled permutation segments. This gives A=sequential character
+//   within each chain while preserving D=chain-8 dependency structure.
+//   The access distribution within chains differs from chains-8 (scrambled).
+//   This is the declared implementation of A=seq, D=chain-8.
 
 use std::env;
 use std::hint::black_box;
@@ -92,16 +100,20 @@ const WARM_LIGHT:     usize = 10;
 const TIMED_LIGHT:    usize = 100;
 
 fn usage() {
-    eprintln!("probe — isolated single-algorithm uProf measurement target");
-    eprintln!("Metatron Dynamics, Inc. V5.0. Bounded over D.");
+    eprintln!("probe V8.0 — isolated single-algorithm uProf measurement target");
+    eprintln!("Metatron Dynamics, Inc. Bounded over D.");
     eprintln!();
     eprintln!("Usage: probe <ALGO> <N>");
-    eprintln!("  ALGO: linear | scrambled | branchy | chained");
-    eprintln!("  N:    positive integer (working set = N * 8 bytes)");
     eprintln!();
-    eprintln!("OC-HW-5 intervention (same N/W, D varies):");
-    eprintln!("  probe scrambled 524288   D_independent  A=scrambled, W=4.1 MB");
-    eprintln!("  probe chained   524288   D_chained      A=scrambled, W=4.1 MB");
+    eprintln!("Factorial block A×D×S (run all 8 in sequence):");
+    eprintln!("  probe linear          524288   F000 A=seq D=ind S0");
+    eprintln!("  probe scrambled       524288   F010 A=scr D=ind S0");
+    eprintln!("  probe chains-8-seq    524288   F001 A=seq D=ch8 S0");
+    eprintln!("  probe chains-8        524288   F011 A=scr D=ch8 S0");
+    eprintln!("  probe linear        4194304    F100 A=seq D=ind S1 *light*");
+    eprintln!("  probe scrambled     4194304    F110 A=scr D=ind S1 *light*");
+    eprintln!("  probe chains-8-seq  4194304    F101 A=seq D=ch8 S1 *light*");
+    eprintln!("  probe chains-8      4194304    F111 A=scr D=ch8 S1 *light*");
     std::process::exit(1);
 }
 
@@ -127,114 +139,338 @@ fn run_scrambled(values: &[f64], perm: &[usize]) -> f64 {
 fn run_branchy(values: &[f64], bits: &[bool]) -> f64 {
     let mut acc = 0.0f64;
     for i in 1..values.len() {
-        if bits[i] {
-            acc += values[i] - values[i - 1];
-        } else {
-            acc -= values[i] - values[i - 1];
-        }
+        if bits[i] { acc += values[i] - values[i-1]; }
+        else        { acc -= values[i] - values[i-1]; }
     }
     black_box(acc)
 }
 
-/// D_chained: a_{t+1} = f(x_{a_t}).
-///
-/// chain[] encodes the same scrambled permutation as D_independent but as a
-/// pointer chain: chain[i] = perm[i]. Each step reads chain[current] to get
-/// the next index. The read result IS the next address — the dependency is
-/// real and not eliminable by the compiler (black_box on current each step
-/// prevents hoisting). values[] is accessed at each chain index for the
-/// arithmetic, keeping O_count and WS equal to D_independent.
-///
-/// #[inline(never)] ensures uProf attributes samples to this function
-/// specifically, not to an inlined caller.
 #[inline(never)]
 fn run_chained(values: &[f64], chain: &[usize]) -> f64 {
     let n = chain.len();
     let mut acc = 0.0f64;
     let mut current = chain[0];
     for _ in 1..n {
-        let next = chain[current];          // a_{t+1} = f(x_{a_t})
+        let next = chain[current];
         acc += values[current] - values[next];
-        current = black_box(next);          // dependency: next step cannot
-                                            // begin until this value is known
+        current = black_box(next);
     }
     black_box(acc)
 }
 
+/// D_k_chained (scrambled): k scrambled chains, round-robin interleaved.
+#[inline(never)]
+fn run_chains_k(values: &[f64], chain: &[usize], heads: &[usize], k: usize) -> f64 {
+    let n = values.len();
+    let l = n / k;
+    let mut acc = 0.0f64;
+    let mut current: Vec<usize> = heads.to_vec();
+    for _ in 0..l {
+        for i in 0..k {
+            let next = chain[current[i]];
+            acc += values[current[i]] - values[next];
+            current[i] = black_box(next);
+        }
+    }
+    black_box(acc)
+}
+
+/// B=branchy variants — apply data-dependent branching to the declared
+/// access pattern. The bits[] sequence is the same declared_branch_bits
+/// used in V4 (BRANCH_SEED). Branch outcome depends on bits[i], producing
+/// data-dependent unpredictable branches. Access pattern (A) and dependency
+/// structure (D) are preserved unchanged.
+///
+/// Four variants covering the factorial B=branchy nodes:
+///   linear-branchy:        A=seq, D=ind, B=br
+///   scrambled-branchy:     A=scr, D=ind, B=br
+///   chains-8-seq-branchy:  A=seq, D=ch8, B=br
+///   chains-8-branchy:      A=scr, D=ch8, B=br
+
+#[inline(never)]
+fn run_linear_branchy(values: &[f64], bits: &[bool]) -> f64 {
+    let mut acc = 0.0f64;
+    for i in 1..values.len() {
+        let diff = values[i] - values[i - 1];
+        if bits[i] { acc += diff; } else { acc -= diff; }
+    }
+    black_box(acc)
+}
+
+#[inline(never)]
+fn run_scrambled_branchy(values: &[f64], perm: &[usize], bits: &[bool]) -> f64 {
+    let mut acc = 0.0f64;
+    for i in 1..values.len() {
+        let diff = values[perm[i]] - values[perm[i - 1]];
+        if bits[perm[i] % bits.len()] { acc += diff; } else { acc -= diff; }
+    }
+    black_box(acc)
+}
+
+#[inline(never)]
+fn run_chains_k_seq_branchy(
+    values: &[f64], chain: &[usize], heads: &[usize], k: usize, bits: &[bool]
+) -> f64 {
+    let n = values.len();
+    let l = n / k;
+    let mut acc = 0.0f64;
+    let mut current: Vec<usize> = heads.to_vec();
+    for _ in 0..l {
+        for i in 0..k {
+            let next = chain[current[i]];
+            let diff = values[current[i]] - values[next];
+            if bits[current[i] % bits.len()] { acc += diff; } else { acc -= diff; }
+            current[i] = black_box(next);
+        }
+    }
+    black_box(acc)
+}
+
+#[inline(never)]
+fn run_chains_k_branchy(
+    values: &[f64], chain: &[usize], heads: &[usize], k: usize, bits: &[bool]
+) -> f64 {
+    let n = values.len();
+    let l = n / k;
+    let mut acc = 0.0f64;
+    let mut current: Vec<usize> = heads.to_vec();
+    for _ in 0..l {
+        for i in 0..k {
+            let next = chain[current[i]];
+            let diff = values[current[i]] - values[next];
+            if bits[current[i] % bits.len()] { acc += diff; } else { acc -= diff; }
+            current[i] = black_box(next);
+        }
+    }
+    black_box(acc)
+}
+
+/// D_k_chained (sequential): k sequential chains, round-robin interleaved.
+/// A=sequential, D=chain-k. Segments are contiguous index ranges [i*L..(i+1)*L).
+/// Within each segment: chain[j] = j+1 (sequential pointer chain).
+/// Last element wraps to segment start (declared closed boundary).
+/// OC-V8-1: access distribution is sequential within each chain segment.
+#[inline(never)]
+fn run_chains_k_seq(values: &[f64], chain: &[usize], heads: &[usize], k: usize) -> f64 {
+    let n = values.len();
+    let l = n / k;
+    let mut acc = 0.0f64;
+    let mut current: Vec<usize> = heads.to_vec();
+    for _ in 0..l {
+        for i in 0..k {
+            let next = chain[current[i]];
+            acc += values[current[i]] - values[next];
+            current[i] = black_box(next);
+        }
+    }
+    black_box(acc)
+}
+
+/// D_k_independent (scrambled): k scrambled segments, round-robin, no dep.
+#[inline(never)]
+fn run_chains_k_ind(values: &[f64], segments: &[Vec<usize>], k: usize) -> f64 {
+    let l = segments[0].len();
+    let mut acc = 0.0f64;
+    for t in 0..l {
+        for i in 0..k {
+            let a_cur  = segments[i][t];
+            let a_next = if t + 1 < l { segments[i][t+1] } else { segments[i][0] };
+            acc += values[a_cur] - values[a_next];
+        }
+    }
+    black_box(acc)
+}
+
+/// Build scrambled chain array and heads for D_k_chained (scrambled).
+fn build_chains(perm: &[usize], k: usize) -> (Vec<usize>, Vec<usize>) {
+    let n = perm.len();
+    let l = n / k;
+    let mut chain = vec![0usize; n];
+    let mut heads = Vec::with_capacity(k);
+    for i in 0..k {
+        let seg = &perm[i * l .. (i + 1) * l];
+        heads.push(seg[0]);
+        for j in 0..l - 1 { chain[seg[j]] = seg[j + 1]; }
+        chain[seg[l - 1]] = seg[0];
+    }
+    (chain, heads)
+}
+
+/// Build sequential chain array and heads for D_k_chained (sequential).
+/// Segments are [i*L..(i+1)*L). chain[j] = j+1 within segment; wrap at end.
+fn build_chains_seq(n: usize, k: usize) -> (Vec<usize>, Vec<usize>) {
+    let l = n / k;
+    let mut chain = vec![0usize; n];
+    let mut heads = Vec::with_capacity(k);
+    for i in 0..k {
+        let start = i * l;
+        heads.push(start);
+        for j in start .. start + l - 1 { chain[j] = j + 1; }
+        chain[start + l - 1] = start; // wrap
+    }
+    (chain, heads)
+}
+
+/// Build segment arrays for D_k_independent (scrambled).
+fn build_segments(perm: &[usize], k: usize) -> Vec<Vec<usize>> {
+    let n = perm.len();
+    let l = n / k;
+    (0..k).map(|i| perm[i * l .. (i + 1) * l].to_vec()).collect()
+}
+
+fn parse_k_chained(algo: &str) -> Option<usize> {
+    match algo {
+        "chains-2"   => Some(2),   "chains-4"   => Some(4),
+        "chains-8"   => Some(8),   "chains-16"  => Some(16),
+        "chains-32"  => Some(32),  "chains-64"  => Some(64),
+        "chains-128" => Some(128), "chains-256" => Some(256),
+        "chains-512" => Some(512),
+        _ => None,
+    }
+}
+
+fn parse_k_ind(algo: &str) -> Option<usize> {
+    match algo {
+        "chains-1-ind"  => Some(1),  "chains-2-ind"  => Some(2),
+        "chains-4-ind"  => Some(4),  "chains-8-ind"  => Some(8),
+        "chains-16-ind" => Some(16), "chains-32-ind" => Some(32),
+        "chains-64-ind" => Some(64),
+        _ => None,
+    }
+}
+
+fn parse_k_seq(algo: &str) -> Option<usize> {
+    match algo {
+        "chains-8-seq" | "chains-8-seq-branchy" => Some(8),
+        _ => None,
+    }
+}
+
+fn parse_k_ch_branchy(algo: &str) -> Option<usize> {
+    match algo {
+        "chains-8-branchy" => Some(8),
+        _ => None,
+    }
+}
+
+fn factorial_label(algo: &str, n: usize) -> String {
+    let s = if n <= STANDARD_MAX_N { "S0" } else { "S1" };
+    let si = if n > STANDARD_MAX_N { "1" } else { "0" };
+    match algo {
+        // B=none nodes (original A×D×S block)
+        "linear"               => format!("G{}000 A=seq D=ind B=none {}",  si, s),
+        "scrambled"            => format!("G{}100 A=scr D=ind B=none {}",  si, s),
+        "chains-8-seq"         => format!("G{}010 A=seq D=ch8 B=none {}",  si, s),
+        "chains-8"             => format!("G{}110 A=scr D=ch8 B=none {}",  si, s),
+        // B=branchy nodes (new A×D×S×B extension)
+        "linear-branchy"       => format!("G{}001 A=seq D=ind B=br {}",    si, s),
+        "scrambled-branchy"    => format!("G{}101 A=scr D=ind B=br {}",    si, s),
+        "chains-8-seq-branchy" => format!("G{}011 A=seq D=ch8 B=br {}",    si, s),
+        "chains-8-branchy"     => format!("G{}111 A=scr D=ch8 B=br {}",    si, s),
+        _ => "non-factorial".to_string(),
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
-    if args.len() != 3 {
-        usage();
-    }
+    if args.len() != 3 { usage(); }
 
     let algo = args[1].to_lowercase();
     let n: usize = args[2].parse().unwrap_or_else(|_| {
-        eprintln!("ERROR: N must be a positive integer, got '{}'", args[2]);
-        std::process::exit(1);
+        eprintln!("ERROR: N must be a positive integer"); std::process::exit(1);
     });
+    if n < 2 { eprintln!("ERROR: N >= 2 required"); std::process::exit(1); }
 
-    if n < 2 {
-        eprintln!("ERROR: N must be >= 2");
-        std::process::exit(1);
+    let valid = [
+        "linear","scrambled","branchy","chained",
+        "chains-2","chains-4","chains-8","chains-16","chains-32","chains-64","chains-128","chains-256","chains-512",
+        "chains-1-ind","chains-2-ind","chains-4-ind","chains-8-ind",
+        "chains-16-ind","chains-32-ind","chains-64-ind",
+        "chains-8-seq","linear-branchy","scrambled-branchy","chains-8-branchy","chains-8-seq-branchy",
+    ];
+    if !valid.contains(&algo.as_str()) {
+        eprintln!("ERROR: unrecognised ALGO '{}'", algo); usage();
     }
 
-    if !["linear","scrambled","branchy","chained"].contains(&algo.as_str()) {
-        eprintln!("ERROR: ALGO must be linear, scrambled, branchy, or chained — got '{}'", algo);
-        usage();
+    let k_ch  = parse_k_chained(&algo);
+    let k_ind = parse_k_ind(&algo);
+    let k_seq = parse_k_seq(&algo);
+    if let Some(k) = k_ch.or(k_ind).or(k_seq).or(parse_k_ch_branchy(&algo)) {
+        if n % k != 0 {
+            eprintln!("ERROR: N={} not divisible by k={}", n, k);
+            std::process::exit(1);
+        }
     }
 
     let warm     = if n <= STANDARD_MAX_N { WARM_STANDARD  } else { WARM_LIGHT  };
     let timed    = if n <= STANDARD_MAX_N { TIMED_STANDARD } else { TIMED_LIGHT };
-    let protocol = if n <= STANDARD_MAX_N { "standard (100w/1000t)" } else { "light (10w/100t) — OC-TG-2" };
+    let protocol = if n <= STANDARD_MAX_N { "standard (100w/1000t)" } else { "light (10w/100t) OC-TG-2" };
+    let ws_mb    = (n * 8) as f64 / (1024.0 * 1024.0);
+    let fact     = factorial_label(&algo, n);
 
-    let ws_bytes = n * 8;
-    let ws_mb    = ws_bytes as f64 / (1024.0 * 1024.0);
-
-    let d_label = match algo.as_str() {
-        "chained"  => "D_chained   (a_{t+1} = f(x_{a_t}) — serialized dependency)",
-        "scrambled"=> "D_independent (a_{t+1} = P(t+1)   — concurrent loads permitted)",
-        _          => "D_independent (sequential / branch — no memory dependency chain)",
-    };
-
-    println!("probe V5.0 — Metatron Dynamics, Inc. Bounded over D.");
-    println!("Algorithm: {}  N: {}  WS: {:.2} MB ({} bytes)", algo, n, ws_mb, ws_bytes);
-    println!("D: {}", d_label);
+    println!("probe V8.0 — Metatron Dynamics, Inc. Bounded over D.");
+    println!("Factorial: {}  N: {}  WS: {:.1} MB", fact, n, ws_mb);
     println!("Protocol: {}  Warm: {}  Timed: {}", protocol, warm, timed);
-    println!("OC-HW-2: timing under uProf is not comparable to benchmark.exe");
+    println!("OC-HW-2: timing under uProf not comparable to benchmark.exe");
     println!();
 
-    // Allocate outside timed loop.
     let values: Vec<f64> = (0..n).map(|i| (i as f64) / (n as f64)).collect();
-    let perm  = declared_permutation(n, SCRAMBLE_SEED);
-    let bits  = declared_branch_bits(n, BRANCH_SEED);
-    // chain[] encodes the same permutation as a pointer chain for D_chained.
-    // chain[i] = perm[i]: reading chain[current] yields the next index.
-    let chain: Vec<usize> = perm.clone();
+    let perm   = declared_permutation(n, SCRAMBLE_SEED);
+    let bits   = declared_branch_bits(n, BRANCH_SEED);
+    let single_chain: Vec<usize> = perm.clone();
 
-    // Warm phase.
-    println!("Warming ({} passes)...", warm);
-    for _ in 0..warm {
-        match algo.as_str() {
-            "linear"    => { run_linear(&values); }
-            "scrambled" => { run_scrambled(&values, &perm); }
-            "branchy"   => { run_branchy(&values, &bits); }
-            "chained"   => { run_chained(&values, &chain); }
-            _           => unreachable!(),
+    let (scr_chain, scr_heads) = if k_ch.is_some() {
+        build_chains(&perm, k_ch.unwrap())
+    } else { (vec![], vec![]) };
+
+    let (seq_chain, seq_heads) = if let Some(k) = k_seq {
+        build_chains_seq(n, k)
+    } else { (vec![], vec![]) };
+
+    let segments = if let Some(k) = k_ind {
+        build_segments(&perm, k)
+    } else { vec![] };
+
+    let k_ch_br = parse_k_ch_branchy(&algo);
+    let k_ch_v  = k_ch.or(k_ch_br).unwrap_or(0);
+    let k_seq_v = k_seq.unwrap_or(0);
+    let k_ind_v = k_ind.unwrap_or(0);
+
+    macro_rules! run_once {
+        () => {
+            match algo.as_str() {
+                "linear"               => { run_linear(&values); }
+                "scrambled"            => { run_scrambled(&values, &perm); }
+                "branchy"              => { run_branchy(&values, &bits); }
+                "chained"              => { run_chained(&values, &single_chain); }
+                "chains-8-seq"         => {
+                    run_chains_k_seq(&values, &seq_chain, &seq_heads, k_seq_v);
+                }
+                // B=branchy factorial nodes
+                "linear-branchy"       => { run_linear_branchy(&values, &bits); }
+                "scrambled-branchy"    => { run_scrambled_branchy(&values, &perm, &bits); }
+                "chains-8-seq-branchy" => {
+                    run_chains_k_seq_branchy(&values, &seq_chain, &seq_heads, k_seq_v, &bits);
+                }
+                "chains-8-branchy"     => {
+                    run_chains_k_branchy(&values, &scr_chain, &scr_heads, k_ch_v, &bits);
+                }
+                s if s.ends_with("-ind") => {
+                    run_chains_k_ind(&values, &segments, k_ind_v);
+                }
+                _ => { run_chains_k(&values, &scr_chain, &scr_heads, k_ch_v); }
+            }
         }
     }
 
-    // Timed phase — hot region for uProf sampling.
-    println!("Timing ({} passes) — this is the uProf sampling window...", timed);
+    println!("Warming ({} passes)...", warm);
+    for _ in 0..warm { run_once!(); }
+
+    println!("Timing ({} passes) — uProf sampling window...", timed);
     let mut times: Vec<u128> = Vec::with_capacity(timed);
     for _ in 0..timed {
         let start = Instant::now();
-        match algo.as_str() {
-            "linear"    => { run_linear(&values); }
-            "scrambled" => { run_scrambled(&values, &perm); }
-            "branchy"   => { run_branchy(&values, &bits); }
-            "chained"   => { run_chained(&values, &chain); }
-            _           => unreachable!(),
-        }
+        run_once!();
         times.push(start.elapsed().as_nanos());
     }
 
@@ -244,15 +480,206 @@ fn main() {
     let ns_per_op = mean_ns / (n - 1) as f64;
 
     println!();
-    println!("Timing complete (informational only under uProf — OC-HW-2):");
+    println!("Timing (informational — OC-HW-2):");
     println!("  Mean: {:.1} ns  Min: {} ns  Max: {} ns", mean_ns, min_ns, max_ns);
     println!("  ns/op: {:.4}", ns_per_op);
     println!();
-    if algo == "chained" || algo == "scrambled" {
-        println!("OC-HW-5: compare chained vs scrambled at same N/W under uProf.");
-        println!("  Prediction: chained CPI substantially higher than scrambled.");
-        println!("  DRAM_PTI approximately equal (same working set).");
+    println!("A×D×S factorial block. Preserve full H vector from uProf.");
+    println!("Run under uProf assess_ext. Record in execution_record.md V8.0.");
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use abr_home_system_benchmark::binary_baselines::{declared_permutation, SCRAMBLE_SEED};
+
+    const TEST_N: usize = 512;
+
+    #[test]
+    fn parse_k_seq_declared_values() {
+        assert_eq!(parse_k_seq("chains-8-seq"), Some(8));
+        assert_eq!(parse_k_seq("chains-8"),     None);
+        assert_eq!(parse_k_seq("scrambled"),     None);
     }
-    println!("Run under uProf assess_ext to capture H variables.");
-    println!("Record counter output in execution_record.md V5.0.");
+
+    #[test]
+    fn factorial_n_s0_divisible_by_k8() {
+        assert_eq!(524_288 % 8, 0);
+    }
+
+    #[test]
+    fn factorial_n_s1_divisible_by_k8() {
+        assert_eq!(4_194_304 % 8, 0);
+    }
+
+    #[test]
+    fn build_chains_seq_correct_heads() {
+        let k = 8;
+        let l = TEST_N / k;
+        let (_, heads) = build_chains_seq(TEST_N, k);
+        assert_eq!(heads.len(), k);
+        for i in 0..k {
+            assert_eq!(heads[i], i * l, "head[{}] should be {}", i, i * l);
+        }
+    }
+
+    #[test]
+    fn build_chains_seq_links_sequential_within_segment() {
+        let k = 4;
+        let l = TEST_N / k;
+        let (chain, heads) = build_chains_seq(TEST_N, k);
+        for i in 0..k {
+            let mut cur = heads[i];
+            for step in 0..l - 1 {
+                let expected_next = heads[i] + step + 1;
+                assert_eq!(chain[cur], expected_next,
+                    "seg {} step {}: chain[{}]={} expected {}", i, step, cur, chain[cur], expected_next);
+                cur = chain[cur];
+            }
+            // Last element wraps to head.
+            assert_eq!(chain[cur], heads[i],
+                "seg {} wrap: chain[{}]={} expected head {}", i, cur, chain[cur], heads[i]);
+        }
+    }
+
+    #[test]
+    fn build_chains_seq_all_indices_covered_once() {
+        let k = 8;
+        let l = TEST_N / k;
+        let (chain, heads) = build_chains_seq(TEST_N, k);
+        let mut visited = vec![false; TEST_N];
+        for i in 0..k {
+            let mut cur = heads[i];
+            for _ in 0..l {
+                assert!(!visited[cur], "index {} visited twice", cur);
+                visited[cur] = true;
+                cur = chain[cur];
+            }
+        }
+        assert!(visited.iter().all(|&v| v));
+    }
+
+    #[test]
+    fn build_chains_seq_no_cross_segment_links() {
+        let k = 4;
+        let l = TEST_N / k;
+        let (chain, heads) = build_chains_seq(TEST_N, k);
+        for i in 0..k {
+            let seg_start = heads[i];
+            let seg_end   = seg_start + l - 1;
+            let mut cur = seg_start;
+            for step in 0..l - 1 {
+                let next = chain[cur];
+                assert!(next >= seg_start && next <= seg_end,
+                    "seg {} step {}: link {} out of segment [{},{}]",
+                    i, step, next, seg_start, seg_end);
+                cur = next;
+            }
+        }
+    }
+
+    #[test]
+    fn build_chains_seq_functional_finite() {
+        let k = 8;
+        let (chain, heads) = build_chains_seq(TEST_N, k);
+        let values: Vec<f64> = (0..TEST_N).map(|i| i as f64 / TEST_N as f64).collect();
+        let result = run_chains_k_seq(&values, &chain, &heads, k);
+        assert!(result.is_finite());
+    }
+
+    // Retain V7 tests.
+    #[test]
+    fn parse_k_chained_all_declared_values() {
+        assert_eq!(parse_k_chained("chains-8"), Some(8));
+        assert_eq!(parse_k_chained("scrambled"), None);
+    }
+
+    #[test]
+    fn declared_n_s0_s1_divisible_by_all_k() {
+        for k in [1usize, 2, 4, 8, 16, 32, 64] {
+            assert_eq!(524_288 % k, 0);
+            assert_eq!(4_194_304 % k, 0);
+        }
+    }
+
+    #[test]
+    fn build_chains_scrambled_all_indices_covered() {
+        let perm = declared_permutation(TEST_N, SCRAMBLE_SEED);
+        let k = 8;
+        let l = TEST_N / k;
+        let (chain, heads) = build_chains(&perm, k);
+        let mut visited = vec![false; TEST_N];
+        for i in 0..k {
+            let mut cur = heads[i];
+            for _ in 0..l {
+                assert!(!visited[cur]);
+                visited[cur] = true;
+                cur = chain[cur];
+            }
+        }
+        assert!(visited.iter().all(|&v| v));
+    }
+
+    // ── OC-RP-3 tests ────────────────────────────────────────────────────────
+
+    #[test]
+    fn oc_rp3_n_s1_divisible_by_all_sweep_k() {
+        // N=4,194,304 must divide evenly by all OC-RP-3 k values.
+        let n = 4_194_304usize;
+        for k in [1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512] {
+            assert_eq!(n % k, 0,
+                "N={} not divisible by k={}", n, k);
+        }
+    }
+
+    #[test]
+    fn oc_rp3_per_chain_working_set_bytes() {
+        // Declare and verify per-chain working set at each k.
+        // L2 boundary on Zen 4: 1 MB = 1,048,576 bytes = 131,072 f64 elements.
+        let n = 4_194_304usize;
+        let l2_elements = 131_072usize; // 1 MB / 8 bytes
+        let expected = [
+            (1usize,   4_194_304usize, false), // L > L2
+            (2,        2_097_152, false),
+            (4,        1_048_576, false),       // L = L2 boundary
+            (8,          524_288, false),
+            (16,         262_144, false),
+            (32,         131_072, true),        // L = L2 exactly
+            (64,          65_536, true),        // L < L2
+            (128,         32_768, true),
+            (256,         16_384, true),
+            (512,          8_192, true),
+        ];
+        for (k, expected_l, expected_within_l2) in expected {
+            let l = n / k;
+            assert_eq!(l, expected_l, "k={}: L={} expected {}", k, l, expected_l);
+            let within_l2 = l <= l2_elements;
+            assert_eq!(within_l2, expected_within_l2,
+                "k={}: within_l2={} expected {}", k, within_l2, expected_within_l2);
+        }
+    }
+
+    #[test]
+    fn parse_k_chained_extended_values() {
+        assert_eq!(parse_k_chained("chains-128"), Some(128));
+        assert_eq!(parse_k_chained("chains-256"), Some(256));
+        assert_eq!(parse_k_chained("chains-512"), Some(512));
+    }
+
+    #[test]
+    fn build_chains_k512_correct_at_small_n() {
+        // Verify k=512 works at smallest valid test N.
+        // TEST_N=512, k=512 gives L=1 — each chain is a single element.
+        let perm = declared_permutation(TEST_N, SCRAMBLE_SEED);
+        let k = 512;
+        assert_eq!(TEST_N % k, 0);
+        let (chain, heads) = build_chains(&perm, k);
+        assert_eq!(heads.len(), k);
+        // Each chain of length 1 wraps back to itself.
+        for i in 0..k {
+            assert_eq!(chain[heads[i]], heads[i],
+                "k=512 chain {}: single element should wrap to self", i);
+        }
+    }
 }
