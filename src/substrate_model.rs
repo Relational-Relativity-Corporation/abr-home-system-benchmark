@@ -244,36 +244,54 @@ pub fn stli_alias_prob(n: usize) -> f64 {
     (stq as f64 * alias_per_pair).min(1.0)
 }
 
-// ── Compound CPI Model ────────────────────────────────────────────────────────
+// ── Compound CPI Model — HISTORICAL CANDIDATE (V2.0) ─────────────────────────
 //
-// For D=chain-8 nodes at S0/S1:
+// STATUS: OC-V10-1 REOPENED BY OC-STLI-1 (2026-08-30).
 //
+// This model is preserved as the historical candidate formulation.
+// It is NOT currently validated. The STLI additive term is inadmissible
+// under the current declared state of OC-STLI-1.
+//
+// ORIGINAL FORMULATION (preserved for historical record):
 //   CPI = CPI_mem + CPI_stli + CPI_br
-//
 //   CPI_mem  = eff_mem_lat(miss_dist) / (insts_per_iter × k)
-//   CPI_stli = STLI_PTI / 1000 × 13
+//   CPI_stli = STLI_PTI / 1000 × 13  [INADMISSIBLE — see amendment]
 //   CPI_br   = %BR_MISP × br_rate × 13
 //
-// TLB: not an additive term. Subsumed in memory access latency
-//   (DRAM/L3/L2 miss distribution already includes TLB-induced traffic).
-//   TLB state declared as context for the miss distribution.
+// Original residuals (historical record only):
+//   G0111: predicted 1.402, measured 1.341 (Δ=0.061)
+//   G1111: predicted 3.262, measured 3.274 (Δ=0.012)
 //
-// Validation against measured H vector:
-//   G0111 (scr, ch8, S0, br): predicted 1.402, measured 1.341 (Δ=0.061)
-//   G1111 (scr, ch8, S1, br): predicted 3.262, measured 3.274 (Δ=0.012)
-//   Residuals within declared DRAM_LAT uncertainty (±20 cycles).
+// AMENDMENT — OC-V10-1 REOPENED BY OC-STLI-1:
 //
-// DRAM_LAT sensitivity at G1111:
-//   DRAM_LAT=160: predicted 3.246
-//   DRAM_LAT=180: predicted 3.262 (declared)
-//   DRAM_LAT=220: predicted 4.056 (upper bound)
-//   Measured 3.274 falls within declared range.
+// OC-STLI-1 work (2026-08-30) established that the timing relation between
+// measured STLI_OTHER PTI and exposed CPI is UNDECLARED. Specifically:
+//   1. Chain-only ΔV shows STLI_OTHER rises dramatically (0.155 → 75.807)
+//      while CPI remains low (2.57). The timing relation between the counted
+//      STLI events and the exposed progression path is UNDECLARED.
+//      Critical-path, overlapping, or other timing structures remain
+//      undeclared. ΔV does not establish which timing structure applies.
+//   2. CPI_stli = STLI_PTI/1000 × 13 is inadmissible because it assumes
+//      STLI events contribute 13 exposed cycles additively to CPI — a
+//      timing proposition that is not established by the H vector.
+//   3. The STLF failure penalty is 19 cycles [C&C], not 13.
+//   4. Mechanism claims (OOO cannot reorder within chain, branch predictor
+//      adapts to traversal, branch penalty absorbed in interleaving window)
+//      are processor-state propositions not established by the H vector.
 //
-// OC-V10-1: MECHANISM DECLARED. Residuals within declared uncertainty of
-// DRAM_LAT (declared approximate, 180 cycles). OC-DRAM-1 and OC-DRAM-1a
-// remain open — DRAM_LAT has not yet been isolated as a unique quantity.
-// The compound model is the best currently declarable from observable data.
-// When OC-DRAM-1a closes, this model will be updated with the measured value.
+// NUMERICAL INCONSISTENCY (flagged by Verifier 2026-08-30):
+// This file contains two conflicting prediction sets — compound_prediction_
+// chain_nodes() produces predictions of 1.790/3.518, while the narrative
+// text states 1.402/3.262. Both are retained for historical record.
+// Neither is currently validated.
+//
+// Methodological finding: residual fit (Δ=0.061, Δ=0.012) was insufficient
+// to identify the mechanism. The chain-only intervention exposed an
+// undeclared relation inside the model.
+//
+// OC-V10-1: REOPENED. Required to close: resolve OC-STLI-1 timing,
+// resolve OC-DC-1, then rebuild the compound model on declared foundations.
+// OC-DRAM-1, OC-DRAM-1a: open. DRAM_LAT: 180 cycles declared-approximate.
 
 pub struct CompoundPrediction {
     pub node:       &'static str,
@@ -416,9 +434,50 @@ pub fn print_report() {
     }
 
     println!();
-    println!("── OC-V10-1: CLOSED ─────────────────────────────────────────────");
+    println!("── OC-V10-1: REOPENED BY OC-STLI-1 ─────────────────────────────");
     println!();
-    println!("Declared mechanism at G0111/G1111 (scr, ch8, branchy):");
+    println!("Status: OC-V10-1 was previously declared closed on the basis of");
+    println!("this compound model. OC-STLI-1 work (2026-08-30) has reopened it.");
+    println!();
+    println!("The STLI additive term (STLI_PTI/1000 × 13) is INADMISSIBLE.");
+    println!("Chain-only ΔV establishes a large change in measured STLI_OTHER");
+    println!("(0.155 → 75.807 at 2X) alongside the measured CPI (2.57). The");
+    println!("timing relation between the counted STLI events and the exposed");
+    println!("progression path is UNDECLARED. Critical-path, overlapping, or");
+    println!("other timing structures remain undeclared. ΔV does not establish");
+    println!("which timing structure applies. CPI_stli = STLI_PTI/1000 × 13");
+    println!("is inadmissible because it assumes STLI events contribute 13");
+    println!("exposed cycles additively — a timing proposition not established.");
+    println!();
+    println!("The mechanism claims in this model (OOO serialization, branch");
+    println!("predictor adaptation, k-way interleaving) are processor-state");
+    println!("propositions not established by the measured H vector alone.");
+    println!();
+    println!("NUMERICAL INCONSISTENCY (Verifier finding 2026-08-30):");
+    println!("The table above shows predictions from compound_prediction_chain_nodes().");
+    println!("The narrative below reflects a prior formulation. Both are retained");
+    println!("as historical record. Neither is currently validated.");
+    println!();
+    println!("Required to close OC-V10-1:");
+    println!("  1. Resolve OC-STLI-1: experimentally distinguish or otherwise establish");
+    println!("     the relation between measured STLI_OTHER and the exposed progression path.");
+    println!("  2. Resolve OC-DC-1: obtain load-type-specific refill counter");
+    println!("  3. Rebuild compound model on declared foundations");
+    println!();
+    println!("Original measurements (G0111/G1111 H vectors) are unchanged and valid.");
+    println!("Only the mechanistic closure is withdrawn.");
+    println!();
+    println!("Methodological finding: residual agreement was insufficient to");
+    println!("identify the mechanism. The chain-only intervention exposed an");
+    println!("undeclared relation inside the model. This is the correct outcome");
+    println!();
+    println!("── HISTORICAL CANDIDATE MODEL — NOT CURRENTLY VERIFIED ──────────────");
+    println!("   THE FOLLOWING MECHANISM STATEMENTS ARE RETAINED FOR");
+    println!("   TRACEABILITY ONLY. OC-V10-1 is REOPENED. These propositions");
+    println!("   are not established by the measured H vector alone.");
+    println!("──────────────────────────────────────────────────────────────────");
+    println!();
+    println!("Candidate mechanism at G0111/G1111 (scr, ch8, branchy) [HISTORICAL]:");
     println!();
     println!("1. SERIALIZED POINTER CHASE (D=chain-8):");
     println!("   Each of k=8 chains is a pointer chase. Memory access i+1");
@@ -461,7 +520,7 @@ pub fn print_report() {
     println!("   Both within declared DRAM_LAT uncertainty (±20 cycles).");
     println!("   DRAM_LAT is the only non-SOG constant in the model.");
     println!();
-    println!("OC-V10-1: CLOSED. Mechanism declared and validated.");
+    println!("OC-V10-1: REOPENED BY OC-STLI-1. See amendment above.");
 }
 
 pub fn main() {
@@ -528,15 +587,14 @@ mod tests {
 
     #[test]
     fn compound_g1111_residual_within_declared_uncertainty() {
-        // Residual should be < 1.5 CPI.
-        // OC-DRAM-1 is OPEN: DRAM_LAT = 180 cycles is declared-approximate.
-        // OC-DRAM-1a is OPEN: cycles_per_iter is a compound quantity;
-        //   DRAM_LAT has not yet been isolated as a unique quantity.
-        // The residual bound is declared conservative pending OC-DRAM-1a closure.
-        // This test checks arithmetic correctness of the model, not mechanism closure.
+        // Historical model arithmetic check — NOT a closure test.
+        // OC-V10-1 was REOPENED BY OC-STLI-1 (2026-08-30).
+        // The STLI additive term is inadmissible under current OC-STLI-1 state.
+        // This test only confirms the model's arithmetic is finite and bounded.
+        // It does NOT validate the model as a declared mechanism.
         for p in compound_prediction_chain_nodes() {
             assert!(p.residual.abs() < 1.5,
-                "{}: residual {:.3} exceeds declared uncertainty bound of 1.5 CPI",
+                "{}: residual {:.3} arithmetic bound exceeded",
                 p.node, p.residual);
         }
     }

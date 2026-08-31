@@ -2441,11 +2441,14 @@ Model: deterministic STLF success/failure based on timing of step 1 vs step 6.
 Assembly: I_asm=9, B_asm=2, one STLF stack recurrence per iteration.
 
 Finding V1-1: CPI prediction with STLI on critical path ≈ 14.
-Observed CPI = 2.57. The model overshoots by 11.5 cycles/instruction.
-Declared conclusion: STLI is NOT on the critical path.
-Case A of OC-STLI-1 is supported: STLI fires within the memory stall window,
-not as an extension of it. CPI is determined by chain load latency,
-not by STLI_WINDOW.
+Observed CPI = 2.57. The model prediction is inconsistent with the
+measured H vector. This establishes: the additive critical-path model
+(CPI_stli = STLI_PTI/1000 × 13) cannot account for the observed CPI.
+It does NOT establish which timing structure applies instead.
+The timing relation between STLI events and the progression path
+remains UNDECLARED. This is a candidate-model exploration result:
+Model A (critical-path STLI) prediction ≠ H.
+It does not follow that a specific alternative mechanism occurred.
 
 Finding V1-2: Binary model cannot produce fractional STLI_PTI.
 The model predicts STLI_PTI of either 0 (STLF always succeeds) or
@@ -2524,18 +2527,22 @@ attributed to the chain load alone without a load-type-specific counter.
 Until OC-DC-1 is resolved with a load-type-specific counter, DRAM_LAT
 cannot be uniquely determined from the current H vector.
 
-### OC-STLI-1 update: Case A declared supported
+### OC-STLI-1 update: timing relation remains undeclared
 
-Case A (STLI fires within the memory stall window, not extending it)
-is supported by V1 simulation finding: models with STLI on the critical
-path predict CPI ≈ 14, far above observed 2.57. The STLF failure penalty
-of 19 cycles [C&C] fires during the chain load stall and is absorbed by it.
+V1 simulation finding: models that place STLI on the critical path predict
+CPI ≈ 14, far above observed 2.57. This establishes that an additive
+CPI_stli = STLI_PTI/1000 × 13 term (critical-path assumption) is
+inconsistent with the measured H vector. It does NOT establish which
+timing structure actually applies.
 
-STLI does not contribute to CPI in the chain-only workload.
-The STLI_PTI of 75.8 (2X) represents STLF failures that occur and are
-penalized within the existing memory stall window. Whether the 75.8 figure
-reflects 68% of iterations (fractional firing) or 100% of iterations with
-68% PTI sampling efficiency (OC-DC-1) remains undeclared.
+The timing relation between measured STLI_OTHER events and the exposed
+progression path remains UNDECLARED. Critical-path, overlapping, or other
+timing structures are all consistent with a model prediction that overshoots.
+ΔV (chained+values → chain-only) establishes a large measured change in
+STLI_OTHER alongside the measured CPI change. It does not establish the
+timing structure of those STLI events.
+
+OC-STLI-1: OPEN. Timing relation undeclared.
 
 ### Declared simulation boundary
 
@@ -2553,10 +2560,12 @@ internal profiling infrastructure can provide that assess_ext cannot.
 
 ### Open conditions updated
 
-OC-STLI-1: Case A declared supported by simulation. Timing relation
-  resolved in Case A's favor. STLI fires within the memory stall window.
-  Remaining question: fractional STLI rate (68% of iterations or 68%
-  PTI sampling of 100% STLF failures). Resolution requires OC-DC-1.
+OC-STLI-1: OPEN. Timing relation UNDECLARED.
+  V1 simulation establishes: additive critical-path model (CPI_stli =
+  STLI_PTI/1000 × 13) is inconsistent with observed CPI = 2.57.
+  This does not establish which timing structure applies.
+  Critical-path, overlapping, or other timing relations remain undeclared.
+  ΔV does not resolve the timing question.
 
 OC-DRAM-1: Simulation confirms DRAM_LAT cannot be determined from current
   H vector without resolving OC-DC-1 first. Root cause is load-type
