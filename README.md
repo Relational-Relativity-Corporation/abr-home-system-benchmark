@@ -1,159 +1,216 @@
 # abr-home-system-benchmark
 
-**Relational (ABR) vs standard binary/von Neumann substrate comparison —
-Ryzen 5 7600X / DDR5-5600 — Metatron Dynamics, Inc.**
+**Relational substrate characterization on Ryzen 5 7600X / DDR5-5600**
+**Metatron Dynamics, Inc. — Lompoc, California**
 
 Bounded over D. No claim beyond D.
 
-## V1.0 Scope
+---
 
-V0.3 measured one thing: ABR operator (A -> B -> R) wall-clock cost on a
-declared synthetic graph. That measurement is preserved unchanged as
-**Regime 1** below — it is real, reproduced-twice data and remains the
-control/floor cost for everything else in this repo.
+## What This Repo Is
 
-V1.0 expands the question from "what does an ABR pass cost on this
-hardware" to "how does a relational approach to information handling on
-this chip compare to the standard binary/Boolean approach the chip was
-designed around, at three different layers":
+This repository documents a structured hardware measurement study applying
+the ABR/ABRCE relational mathematics framework to compute-substrate
+characterization on declared consumer hardware. Within ABR/ABRCE, relation
+rather than scalar state is treated as the primary structure for
+characterization. The study uses declared relational operators alongside
+conventional performance observables to characterize how measured hardware
+behavior changes with configuration.
 
-| Regime | Layer | Module | Status |
-|---|---|---|---|
-| 1 | ABR operator cost (control data) | `operators.rs`, `scaling.rs`, `throughput_derivation.rs` | Measured, reproduced 3x (V0.3 x2, V1.0 x1) |
-| 2 | OS-to-CPU process exchange layer | `process_topology.rs` | Structural scaffold; real idle/utilization data not yet ingested (OC-PT-1) |
-| 3 | Task-complexity crossover matrix (5 binary algos) | `complexity_crossover.rs`, `binary_baselines.rs` | Sandbox run complete (V1.1); declared-hardware confirmation pending |
+The work is empirical and bounded. Every result is traceable to a declared
+observable through a declared measurement mapping M. Every open condition
+is explicitly named. No claim is made beyond the declared domain D.
 
-Gate-level Boolean logic itself (the physical transistor layer) is **not**
-a regime here — logic gates are physical circuit structure, not code, and
-are declared out of scope for a software-level comparison. Regime 2 is the
-lowest software-addressable layer above that physical floor.
+---
 
 ## Declared Hardware
 
 - CPU: AMD Ryzen 5 7600X (Zen 4, 6 cores, 32 MB L3)
-- RAM: 32 GB DDR5-5600 (2x 16 GB Micron, dual channel)
+- RAM: 32 GB DDR5-5600 (2× 16 GB Micron, dual channel)
 - OS: Windows 11 Home 64-bit
+- Profiler: AMD uProf (assess_ext configuration)
 
-## Regime 1 — ABR Operator Cost (unchanged from V0.3)
+---
 
-### Declared Operators (kernel V7)
+## Central Finding — V12.0.0
 
-- A(x)[e] = x[source(e)] - x[target(e)]
-- B(g)[e] = g[e] + Σ_{f ∈ succ(e)} g[f]  (immediate successor inputs)
-- rho[i] = rho_base * chi[i] / (1 + chi[i])  (node-indexed, rho_base=1.0)
-- R(g)[e] = g[e] + rho[src(e)] * (Σ_succ g[f] - Σ_pred g[p])
+A 16-node factorial experiment across four declared factors on Zen 4:
 
-### Key Finding — Scaling Measurement (V0.3, preserved)
+| Factor | Levels |
+|--------|--------|
+| A — Access pattern | sequential vs. scrambled |
+| D — Dependency structure | independent vs. chain-8 |
+| S — Working-set size | S0 ≈ 4 MB vs. S1 ≈ 32 MB |
+| B — Branch pattern | branch-free vs. data-dependent |
 
-V7 ABR compute time scales with approximately constant cost per declared
-relation for the declared open-chain topology on this hardware.
-Reproduced across two independent runs on 2026-08-08.
+**Four-way interaction: I_{A,D,S,B} = 1.937**
 
-NS/EDGE range across both runs: 3.404-3.845 ns/edge. Binding mechanism
-not identified — OC-HB-4 remains open.
+Measured under uProf assess_ext on declared hardware. Verified through
+three independent paths through the 4-cube. Independent of all open
+microarchitectural conditions.
 
-Full run tables: see `docs/M_declaration.md`.
+The measured effect of changing one factor depends substantially on the
+states of the other three. Access pattern, dependency structure,
+working-set size, and branching do not compose independently at the
+hardware level in this domain.
 
-### Open Conditions (Regime 1)
+---
 
-- OC-HB-1: L3 bandwidth not directly measured
-- OC-HB-2: L3 residency via warm-pass protocol only
-- OC-HB-3: MI355X ratio mixed epistemic (structural vs measured)
-- OC-HB-4: Binding mechanism not identified — operator isolation open
+## Assembly Declaration
 
-## Regime 2 — OS-to-CPU Process Exchange Layer
+The chain-only pointer-chase workload (probe.rs, run_chain_only) was
+compiled to release assembly and inspected directly. The hot loop
+(.LBB13_3) contains nine instructions and two branches, with an
+exact-address stack store/load pair at 40(%rsp) and a bounds-check
+sequence (cmpq/jae) between the store and subsequent load.
 
-Applies the same V7 operators to a real process-activation trace instead
-of a synthetic graph. Processes are declared as loci; the current
-observable is activation-time offset only (a proxy — see OC-PT-1).
-Edges are declared between temporally consecutive processes whose start
-times fall within a declared co-activation window (OC-PT-2).
+The assembly establishes instruction structure. The timing contribution
+of store-to-load forwarding, the bounds check, and their
+microarchitectural interaction remain undeclared.
 
-`example_session_trace()` provides a real, hand-transcribed 26-process
-trace captured from an AMD uProf "Select Profile Target" screen
-(2026-08-28) so this module has real data to build and test against
-before a full uProf CSV export pipeline is wired up.
+---
 
-**This module currently answers "can V7 operators run over a real process
-trace" (yes — confirmed by test), not "does doing so reduce redundant
-OS-to-CPU switching."** That second, actual claim requires ingesting real
-idle/active CPU utilization per process from uProf hotspot sampling, which
-is not yet wired up.
+## Instrumentation Boundary
 
-### Open Conditions (Regime 2)
+The experiment reached a precisely located instrumentation boundary.
+Two events needed to disaggregate load-type-specific refills:
 
-- OC-PT-1: Only activation-timestamp observable ingested. Idle/active
-  utilization telemetry (uProf hotspot data, not the process list) is
-  required to test the actual efficiency question under discussion.
-- OC-PT-2: Co-activation window (2.0s) is declared, not derived.
-- OC-PT-3: No comparison against actual OS scheduler behavior (context
-  switches, redundant wake events) has been made yet.
+- `ls_stlf` (PMCx035) — store-to-load forward hits
+- `ls_bad_status2.stli_other` (PMCx024, UMask 0x02) — non-forwardable conflicts
 
-## Regime 3 — Task-Complexity Crossover Matrix (V1.1)
+Neither is accessible through the uProf predefined event set on this
+hardware. Raw event codes are rejected by AMDuProfCLI. Data Fabric
+counters are likewise not exposed on desktop Ryzen through uProf.
 
-Tests whether the quadratic-vs-linear crossover found in the language
-model / token-count case (abr-relational-attention: crossover near five
-paragraphs) reproduces for a generic hardware-level task — and, as of
-V1.1, whether V1.0's finding was a genuine relational-structure effect or
-an artifact of comparing against a single poor-scaling binary baseline.
+This boundary is declared, not inferred. The open conditions it produces:
 
-V1.0 tested one binary baseline: all-pairs difference, O(N²). It found
-relational cheaper at every declared tier (confirmed on declared hardware,
-2026-08-29 — see `docs/M_declaration.md`), with no crossover in range —
-OC-CC-1. But OC-CC-2 flagged that this alone couldn't distinguish "ABR is
-genuinely efficient" from "any O(N) algorithm beats any O(N²) algorithm."
+- **OC-DC-1:** load-type-specific refill disaggregation not achievable
+  with available counters
+- **OC-STLI-1:** STLI_OTHER rose from ~0 to 75.8 PTI between
+  chained+values and chain-only workloads; timing relation to CPI
+  undeclared
 
-V1.1 (`binary_baselines.rs`) adds four more binary algorithms — a plain
-linear scan (O(N)), a running prefix sum (O(N)), a bounded sliding-window
-comparison (O(N·K), a more realistic conventional pattern than all-pairs),
-and a sort-then-scan (O(N log N)) — and times all five against the same
-relational ABR chain.
+A technical post on the AMD Developer Forum describes this boundary and
+requests input from AMD engineers.
 
-**Sandbox result (2026-08-28, not yet confirmed on declared hardware —
-see OC-CC-3): relational wins ONLY against the O(N²) all-pairs baseline.**
-Against the O(N) and O(N log N) baselines, binary wins outright, and the
-margin widens with N (linear scan and prefix sum: relational runs 4.6x to
-8.7x SLOWER, not faster, at LARGE). The bounded-window baseline sits near
-parity, with binary slightly ahead at most tiers.
+---
 
-This is consistent with V1.0's finding having been a complexity-class
-artifact rather than a genuine relational-structure advantage. **This
-result requires confirmation on the declared hardware (Ryzen 5 7600X)
-before being treated as admissible over D** — run `cargo run --release`
-and see `docs/M_declaration.md` V1.1 addendum for the full table and next
-steps once that run is captured.
+## Processor Relation Ledger
 
-### Open Conditions (Regime 3)
+docs/processor_relation_ledger.md declares 24 processor relations (PRLs)
+across six parts of the Zen 4 pipeline, each with source, transformation,
+observability status, and verification status. Observability is declared
+as OBS (directly observable), PART (partially observable), or NONE (not
+observable under current instrumentation). NONE is a complete and
+admissible declaration.
 
-- OC-CC-1: Tier sizes declared, not derived. Confirmed (declared
-  hardware, V1.0) no crossover exists against ALL_PAIRS in this range.
-  Still open for the four algorithms added in V1.1.
-- OC-CC-2: (narrowed in V1.1) — five binary algorithms across three
-  complexity classes tested, not one. Still a declared representative
-  set, not exhaustive (OC-BB-2).
-- OC-CC-3: All timing must be run on the declared hardware to be
-  admissible. Sandbox/CI timings are structural sanity checks only.
-- OC-BB-1 (binary_baselines.rs): WINDOW_K=8 is declared, not derived.
-- OC-BB-2 (binary_baselines.rs): five baselines are representative, not
-  an exhaustive survey of binary algorithms.
+---
+
+## Measurement Infrastructure
+
+**Pass B (assess_ext):** Standard uProf configuration. Collects CPI,
+retired instructions, branch behavior, cache fills by tier. Used for
+all 16 factorial nodes and chain-only variants.
+
+**Pass A (load-type disaggregation):** Custom six-counter profile
+(config/pass_a_load_type.xml). Designed to collect ls_stlf,
+ls_bad_status2, and demand fills by source independently. Currently
+blocked at instrumentation boundary — events not accessible through
+uProf on this hardware. Config is retained as a declared instrument
+specification for future use with AMD tooling.
+
+---
+
+## Open Condition Register (current)
+
+| ID | Status | Description |
+|----|--------|-------------|
+| OC-DRAM-1 | OPEN | DRAM_LAT not isolatable until OC-DC-1 resolved |
+| OC-DC-1 | OPEN | Refill PTI aggregates load types; load-type-specific counter not accessible |
+| OC-STLI-1 | OPEN | STLI_OTHER timing relation to CPI undeclared |
+| OC-BR-1 | OPEN | BR_PTI at 4X departs 19.6% from assembly prediction; unexplained |
+| OC-TLB-1 | OPEN | TLB miss rate not directly measured |
+| OC-OC-1 | OPEN | Op-cache residency unverified |
+| OC-TG-2 | OPEN | S1 elevated variance (light protocol) |
+| OC-HW-2 | OPEN | uProf timing not comparable to benchmark.exe timing |
+
+---
+
+## What Is Airtight
+
+- I_{A,D,S,B} = 1.937 — independent of all open conditions
+- Assembly declaration for run_chain_only hot loop
+- Instrumentation boundary — three components, precisely located
+- Pointer chase serialization finding — store-to-load dependency is
+  load-bearing for workload structure; cannot be surgically removed
+
+---
+
+## Prior Methodology Note
+
+Early versions of this repo included a comparison of the relational
+approach against an O(N²) all-pairs baseline. That comparison was a
+methodological error — any O(N) algorithm outperforms O(N²) at scale,
+and the result carried no framework-specific signal. It has been retired
+from the study.
+
+---
 
 ## Build and Run
 
-    cargo build --release
-    cargo test
-    cargo run --release
+```powershell
+cargo test --release
+cargo build --release
+```
 
-## Test Results
+Measurement sessions (from repo root):
 
-41/41 tests passing (V1.0): 24 from Regime 1 (unchanged), 10 from Regime
-2, 6 from Regime 3, 1 shared graph test. See `docs/execution_record.md`.
+```powershell
+$probe = ".\target\release\probe.exe"
+$uprof = "C:\Program Files\AMD\AMDuProf\bin\AMDuProfCLI.exe"
+$out   = "$HOME\uprof_out"
 
-## Grounding Documents
+# 16-node factorial block (Pass B)
+& $uprof collect --config assess_ext -o "$out\G0000" $probe linear 524288
+# ... (see run_probe_v9.ps1 for full sequence)
 
-- `docs/M_declaration.md` — full declaration, Regime 1 run tables, V1.0 addendum
-- `docs/execution_record.md` — cargo test / cargo run outputs
-- kernel `operators.rs` V7 — ABR operator declaration (lines 890-988)
-- `abr-infinity-fabric` — OC-IF-5 references this repo's Regime 1 measurement (unaffected by V1.0 expansion — Regime 1 code and data are unchanged)
+# chain-only variants
+& $uprof collect --config assess_ext -o "$out\chain_only_2x" $probe chain-only 4194304
+```
+
+Assembly emission:
+
+```powershell
+cargo rustc --release --bin probe -- --emit=asm
+```
+
+---
+
+## Repository Structure
+
+| Path | Contents |
+|------|----------|
+| src/probe.rs | Isolated measurement binary — factorial block + chain-only workloads |
+| src/substrate_model.rs | Processor substrate model — compound CPI predictions |
+| src/operators.rs | ABR kernel V7 — A, B, R operators |
+| docs/execution_record.md | Full measurement record — all declared hardware runs |
+| docs/processor_relation_ledger.md | 24 PRLs — Zen 4 pipeline relation declarations |
+| docs/M_declaration.md | Measurement mapping declaration |
+| config/pass_a_load_type.xml | Pass A counter specification (instrumentation boundary) |
+| sim/ | Python simulation files — chain-only loop exploration |
+
+---
+
+## Version History
+
+| Version | Description |
+|---------|-------------|
+| V12.0.0 | Pass A load-type profile, ΔR_stack workload, assembly declaration, bounds-check refinement |
+| V11.0.0 | 129 tests, four-way interaction I_{A,D,S,B}=1.937 hardware-validated, processor relation ledger |
+| V9.0–V10.0 | A×D×S×B factorial block, B dimension added, substrate model |
+| V1.0–V2.0 | Regime 1–3 scaffold, initial crossover matrix |
+
+---
 
 *Metatron Dynamics, Inc. — Lompoc, California*
 *Bounded over D. No claim beyond D.*
