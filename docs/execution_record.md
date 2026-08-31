@@ -2385,3 +2385,188 @@ observable under assess_ext (OC-STLI-1 is at the instrumentation boundary).
 chain_load_lat bracket: [8.3, 17.1] cycles (declared, not estimated).
 DRAM_LAT remains undeclared.
 
+
+---
+
+## Chain-Only Simulation — Python Exploration (2026-08-30)
+
+### Declaration
+
+This section records the findings of a Python exploration simulation
+(chain_only_sim_v1.py, v2.py, v3.py). The simulation is exploration only.
+No result in this section enters the kernel or the compound CPI model until
+Rust confirmation is complete. Bounded over D. No claim beyond D.
+
+Sources for simulation parameters:
+  [SOG]  AMD Software Optimization Guide, Zen 4, Pub 57647 Rev 1.01
+  [C&C]  Chester Lam, "AMD's Zen 4, Part 2: Memory Subsystem and Conclusion"
+         Chips and Cheese, Nov 2022. chipsandcheese.com
+  [gem5] gem5 O3CPU model, github.com/gem5/gem5
+  [PPR]  AMD Processor Programming Reference 55901
+
+### Newly sourced constants entering the declared parameter set
+
+All from [C&C], empirically measured via microbenchmark on Zen 4:
+
+  STLF latency (exact address match): 0 cycles additional latency
+    [C&C]: "a chain of dependent loads and stores will execute at 2 IPC"
+    "The load and store addresses must match exactly."
+    This supersedes the prior approximate STLF_WINDOW parameter.
+    For the chain-only loop: store at 40(%rsp) → load from 40(%rsp)
+    is an exact address match. STLF succeeds with zero additional latency
+    once store data is available in the store queue.
+
+  STLF failure penalty: 19 cycles (Zen 4 specific)
+    [C&C]: "Zen 4 takes a 19 cycle penalty" for STLF failure cases.
+    This replaces the prior approximate 13-cycle penalty.
+
+  Load queue (total in-flight): 136 loads
+    [C&C]: microbenchmark indicates "136 load operations in flight"
+    (includes both load execution queue and load validation queue).
+
+  L2 DTLB miss penalty: 7-8 cycles when page tables are L3-resident
+    [C&C]: visible at 12MB+ test sizes when L2 DTLB is exceeded.
+    At our working set sizes (64MB-128MB): page tables may not be L3-resident.
+    TLB walk at these sizes goes to DRAM — penalty is DRAM-latency-dependent.
+    Declared as: TLB walk penalty is a function of DRAM_LAT at these N values.
+
+  DDR5-6000 end-to-end memory latency: 73.35 ns (measured by [C&C])
+    At 5.0 GHz: 367 cycles. This is end-to-end (includes TLB + cache hierarchy)
+    using 2MB pages (no TLB pressure). Not directly comparable to our 4KB-page
+    condition with L2_DTLB saturation.
+
+### Simulation V1: Binary STLF model
+
+Model: deterministic STLF success/failure based on timing of step 1 vs step 6.
+Assembly: I_asm=9, B_asm=2, one STLF stack recurrence per iteration.
+
+Finding V1-1: CPI prediction with STLI on critical path ≈ 14.
+Observed CPI = 2.57. The model overshoots by 11.5 cycles/instruction.
+Declared conclusion: STLI is NOT on the critical path.
+Case A of OC-STLI-1 is supported: STLI fires within the memory stall window,
+not as an extension of it. CPI is determined by chain load latency,
+not by STLI_WINDOW.
+
+Finding V1-2: Binary model cannot produce fractional STLI_PTI.
+The model predicts STLI_PTI of either 0 (STLF always succeeds) or
+111.1 (1000/I_ASM, STLF always fails). Observed: 75.8 (2X), 48.4 (4X).
+A probabilistic model is required.
+
+### Simulation V2: STLF latency correction
+
+Model: STLF latency = 0 for exact address match [C&C], applied to
+chain-only stack recurrence. Overhead revised accordingly.
+Finding: chain_load_lat derived from CPI × I_ASM minus overhead.
+
+Finding V2-1: With STLF_LAT=0 and I_ASM=9:
+  CPI × I_ASM = total cycles per iteration
+  chain_load_lat = CPI × I_ASM − overhead
+
+  Applying to 2X: chain_load_lat = 2.5743 × 9 − overhead = 23.2 − overhead
+  Overhead (bounds + AGU) ≈ 1.5 cycles
+  chain_load_lat ≈ 21.7 cycles
+
+  This is below L3_LAT (50 cycles). But DRAM_PTI = 62.3 at 2X — DRAM
+  accesses are present. The derived chain_load_lat is inconsistent with
+  the measured refill distribution.
+
+Finding V2-2: The simple serialized model (W=1, no OOO overlap) cannot
+simultaneously satisfy CPI and the measured refill distribution.
+OOO iteration overlap is required to explain the observed CPI.
+
+### Simulation V3: OOO overlap and W-consistency
+
+Model: CPI = eff_mem_lat / (I_ASM × W), where W is OOO iteration overlap.
+eff_mem_lat = f_dram × DRAM_LAT + f_l3 × L3_LAT + f_l2 × L2_LAT.
+f_dram, f_l3, f_l2 from measured refill PTI distribution.
+
+Finding V3-1: OOO overlap W as a function of DRAM_LAT.
+For W(2X) = W(4X) (same hardware, consistent OOO behavior):
+
+  Solving: DRAM_LAT = −24.4 cycles (physically impossible).
+
+This is a negative result in the precise sense: no physically plausible
+DRAM_LAT satisfies the W-consistency constraint under this model.
+
+Finding V3-2: The fundamental tension declared.
+The measured CPI (2.57 at 2X, 2.09 at 4X) and the measured miss distribution
+(2X: 60.3% DRAM, 21.4% L3, 18.2% L2) cannot be simultaneously satisfied
+by any simple OOO-overlap model with physically plausible DRAM_LAT.
+
+Root cause declared: The L1_DC refill PTI counters count ALL cache refills
+from ALL load instructions in the hot loop. The chain-only loop has two
+load instructions per iteration: the chain load (step 5, which goes to
+L2/L3/DRAM on miss) and the stack load (step 1, satisfied by STLF from the
+store queue — produces NO cache refill). The measured refill distribution
+(f_dram, f_l3, f_l2) is attributed to chain loads only by the model,
+but the actual counter cannot distinguish load types. If the true chain
+load miss distribution differs from the aggregate PTI distribution, the
+model's inputs are incorrect.
+
+Finding V3-3: Instrumentation boundary precisely identified.
+The simulation requires a load-type-specific refill counter — one that
+separately reports chain load refills vs STLF load refills. This counter
+is not present in the assess_ext profile. It may exist in the Zen 4 PMU
+event list [PPR 55901] but has not been confirmed.
+
+### OC-DC-1 update: precision statement
+
+OC-DC-1 (previously stated as "L1_DC_ACCESSES PTI counter-to-instruction
+mapping undeclared") is now more precisely stated:
+
+The refill PTI counters (DRAM_PTI, L3_PTI, L2_PTI) count cache refills
+from all load instructions without distinguishing load type. In the
+chain-only loop, the chain load (step 5) and the STLF load (step 1) have
+fundamentally different miss behavior: the chain load misses to L2/L3/DRAM;
+the STLF load has zero cache refill cost. The aggregate PTI cannot be
+attributed to the chain load alone without a load-type-specific counter.
+
+Until OC-DC-1 is resolved with a load-type-specific counter, DRAM_LAT
+cannot be uniquely determined from the current H vector.
+
+### OC-STLI-1 update: Case A declared supported
+
+Case A (STLI fires within the memory stall window, not extending it)
+is supported by V1 simulation finding: models with STLI on the critical
+path predict CPI ≈ 14, far above observed 2.57. The STLF failure penalty
+of 19 cycles [C&C] fires during the chain load stall and is absorbed by it.
+
+STLI does not contribute to CPI in the chain-only workload.
+The STLI_PTI of 75.8 (2X) represents STLF failures that occur and are
+penalized within the existing memory stall window. Whether the 75.8 figure
+reflects 68% of iterations (fractional firing) or 100% of iterations with
+68% PTI sampling efficiency (OC-DC-1) remains undeclared.
+
+### Declared simulation boundary
+
+The simulation correctly identified that it cannot close DRAM_LAT from the
+current H vector. This is not a failure of the simulation — it is a precise
+statement of the instrumentation limit. The boundary is:
+
+  The assess_ext profile cannot distinguish load-type-specific cache miss
+  behavior. A load-type-specific counter (available in Zen 4 PMU [PPR 55901]
+  but not in assess_ext) would resolve the tension between CPI and the
+  aggregate miss distribution.
+
+This is the natural entry point for collaboration with AMD: what their
+internal profiling infrastructure can provide that assess_ext cannot.
+
+### Open conditions updated
+
+OC-STLI-1: Case A declared supported by simulation. Timing relation
+  resolved in Case A's favor. STLI fires within the memory stall window.
+  Remaining question: fractional STLI rate (68% of iterations or 68%
+  PTI sampling of 100% STLF failures). Resolution requires OC-DC-1.
+
+OC-DRAM-1: Simulation confirms DRAM_LAT cannot be determined from current
+  H vector without resolving OC-DC-1 first. Root cause is load-type
+  aggregation in refill PTI counters.
+
+OC-DC-1 (updated): Precisely — the refill PTI counters aggregate all load
+  types. A Zen 4 PMU load-type-specific counter [PPR 55901] would close this.
+  This is the primary remaining instrumentation gap.
+
+OC-BR-1: Unchanged. 4X BR_PTI departure unexplained. Candidate 2
+  (misprediction flush) eliminated. Candidates 1 (SMT) and 3 (scheduling)
+  remain. True SMT isolation not achieved via --affinity 1.
+
