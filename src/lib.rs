@@ -35,6 +35,21 @@
 //   XLARGE/XXLARGE use lighter timing protocol (OC-CC-4).
 //   OC-CC-1 addressed. 65 tests passing (sandbox verification 2026-08-29).
 //
+// V12.0: Pass A load-type disaggregation profile added (config/pass_a_load_type.xml).
+//   Six-counter custom AMDuProfPcm config: ls_stlf, ls_bad_status2.stli_other,
+//   ls_dmnd_fills_from_sys.dram_io_near, ls_dmnd_fills_from_sys.local_l2,
+//   plus cycle/instruction anchors. No multiplexing. Addresses OC-DC-1 and OC-STLI-1.
+//
+//   ΔR_stack intervention added (probe.rs run_chain_only_stack_spill).
+//   Declared relational change: stack store→load address match broken via two-slot
+//   alternating buffer. Chain[] traversal relation preserved identically.
+//   New algo: chain-only-stack-spill. Two new tests added.
+//   ΔR_stack = H(chain-only-stack-spill) − H(chain-only). Addresses OC-STLI-1.
+//
+//   REQUIRED before first ΔR_stack run: inspect assembly (cargo rustc --release
+//   -- --emit=asm) and confirm distinct store/load addresses in hot loop.
+//   Record assembly declaration in execution_record.md before H vector entry.
+//
 // ── Regimes ───────────────────────────────────────────────────────────────────
 //
 //   Regime 1 — operators.rs / scaling.rs / throughput_derivation.rs / timing_harness.rs

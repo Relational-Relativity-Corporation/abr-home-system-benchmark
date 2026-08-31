@@ -1,4 +1,4 @@
-# Execution Record — abr-home-system-benchmark V2.0
+# Execution Record — abr-home-system-benchmark V2.0 / repo V12.0.0
 
 **Metatron Dynamics, Inc.** Bounded over D. No claim beyond D.
 
@@ -2579,3 +2579,90 @@ OC-BR-1: Unchanged. 4X BR_PTI departure unexplained. Candidate 2
   (misprediction flush) eliminated. Candidates 1 (SMT) and 3 (scheduling)
   remain. True SMT isolation not achieved via --affinity 1.
 
+
+---
+
+## V12.0.0 — Pass A + ΔR_stack (date TBD)
+
+### Build state
+- 129 tests passing (V11.0.0 baseline). Two new tests added in V12.0.0:
+  - `stack_spill_produces_valid_index`
+  - `stack_spill_and_chain_only_traverse_same_chain`
+- Run `cargo test --release` and confirm 131 tests passing before proceeding.
+
+---
+
+### Assembly Declaration — run_chain_only_stack_spill (REQUIRED BEFORE MEASUREMENT)
+
+**Status: NOT YET DECLARED**
+
+Run:
+```
+cargo rustc --release -- --emit=asm
+```
+Locate `run_chain_only_stack_spill` in `target\release\deps\probe-*.s`.
+
+Declare:
+- Store instruction and address (buf[toggle])
+- Load instruction and address (buf[1-toggle])
+- Confirm store address ≠ load address (8 bytes apart on stack)
+- Confirm toggle alternation is not unrolled
+- Confirm chain[black_box(prev)] load is structurally unchanged from run_chain_only
+
+If buf[] is lifted to registers: ΔR_stack intervention has no declared effect.
+Record that finding and do not run the ΔR_stack uProf sessions.
+
+---
+
+### Pass A — Load-Type Disaggregation (PENDING)
+
+Config: `config/pass_a_load_type.xml`
+Counters: ls_stlf (PMCx035), ls_bad_status2.stli_other (PMCx024:0x02),
+          ls_dmnd_fills_from_sys.dram_io_near (PMCx043:0x08),
+          ls_dmnd_fills_from_sys.local_l2 (PMCx043:0x01),
+          ls_not_halted_cyc (PMCx076), ex_ret_instr (PMCx0C0)
+Six counters. No multiplexing. All simultaneously active.
+
+| Variant          | STLF_PTI | STLI_PTI | DRAM_FILL_PTI | L2_FILL_PTI | STLF_RATE |
+|------------------|----------|----------|---------------|-------------|-----------|
+| chain-only 1X    | —        | —        | —             | —           | —         |
+| chain-only 2X    | —        | —        | —             | —           | —         |
+| chain-only 4X    | —        | —        | —             | —           | —         |
+
+STLF_RATE = STLF_PTI / 111.11 (expected 1.0 if STLF always succeeds)
+FILL_ACCOUNT = DRAM_FILL_PTI + L2_FILL_PTI (compare against Pass B total fill PTI)
+
+OC-DC-1 disposition: PENDING Pass A results.
+OC-STLI-1 (partial): PENDING Pass A results.
+
+---
+
+### ΔR_stack — H Vector (PENDING assembly declaration)
+
+ΔR_stack = H(chain-only-stack-spill) − H(chain-only) at matched N and protocol.
+
+| Counter         | chain-only 2X | stack-spill 2X | ΔR_stack |
+|-----------------|---------------|----------------|----------|
+| CPI             | 2.57 (V11)    | —              | —        |
+| STLI_PTI        | 75.8 (V11)    | —              | —        |
+| STLF_PTI (PA)   | —             | —              | —        |
+| DRAM_FILL_PTI   | —             | —              | —        |
+| BR_PTI          | 222.67 (V11)  | —              | —        |
+
+Interpretation (pending):
+- ΔR_stack(STLI_PTI) > 0: STLF failing on non-exact-match (expected)
+- ΔR_stack(STLF_PTI) < 0: STLF hits falling (expected)
+- ΔR_stack(CPI) direction: constrains Case A (absorbed) vs Case B (critical path) of OC-STLI-1
+
+### Assembly Declaration � run_chain_only bounds-check refinement (2026-08-31)
+
+Assembly inspection (probe.s, cargo rustc --release --bin probe -- --emit=asm)
+establishes an exact-address stack store/load pair at 40(%rsp), with a
+bounds-check sequence (cmpq / jae) occurring between the store and the
+subsequent load in the hot loop (.LBB13_3). The assembly establishes the
+instruction structure but does not independently establish the timing
+contribution of store-to-load forwarding, the intervening bounds check,
+or their microarchitectural interaction. All three remain undeclared.
+
+This refinement does not modify any prior measured result.
+I_{A,D,S,B} = 1.937 is independent of this open condition.

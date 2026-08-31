@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  pass_a_load_type.xml — Metatron Dynamics, Inc.
+  Pass A: Load-Type Disaggregation Profile
+  abr-home-system-benchmark V11.0.0
+  Bounded over D. No claim beyond D.
+
+  PURPOSE
+  -------
+  Disaggregates the refill PTI aggregate that assess_ext cannot resolve.
+  Addresses OC-DC-1: ls_dmnd_fills_from_sys aggregates all demand load
+  types. chain-only has two load types:
+    Step 1: stack load (40(%rsp)) → STLF candidate, zero refill cost on hit
+    Step 5: chain[] load → pointer chase, goes to L2/L3/DRAM on miss
+  This pass separates them into declared observables through M.
+
+  COUNTER BUDGET — Zen 4
+  ----------------------
+  6 programmable counters per core. This config uses exactly 6.
+  No multiplexing. All counters simultaneously active for full run duration.
+
+  EVENT DECLARATIONS (PPR Family 19h Model 11h, Revision B1)
+  -----------------------------------------------------------
+  PMCx076  ls_not_halted_cyc        — core cycles (anchor)
+  PMCx0C0  ex_ret_instr             — retired instructions (anchor; PTI denominator)
+  PMCx035  ls_stlf                  — STLF hits (step 1 stack load, forward succeeds)
+  PMCx024  ls_bad_status2.stli_other  UMask=0x02 — non-forwardable conflicts (STLF fail)
+  PMCx043  ls_dmnd_fills_from_sys.dram_io_near  UMask=0x08 — DRAM fills, local NUMA
+  PMCx043  ls_dmnd_fills_from_sys.local_l2      UMask=0x01 — L2 fills (completeness)
+
+  OPEN CONDITIONS ADDRESSED
+  -------------------------
+  OC-DC-1: closes when ls_stlf PTI + ls_dmnd_fills_from_sys.dram_io_near PTI
+           account for the observed ls_dmnd_fills_from_sys.all PTI from Pass B.
+           If sum matches: load-type attribution is admissible.
+           If sum does not match: hardware prefetch or other fill type present;
+           ls_any_fills_from_sys (PMCx044) needed in a subsequent pass.
+
+  OC-STLI-1 (partial): ls_stlf PTI directly observable. Expected under
+           successful STLF: ~1000/I_asm = 1000/9 ≈ 111 PTI.
+           Observed value constrains whether STLF succeeds every iteration.
+
+  RUN PROTOCOL
+  ------------
+  Run Pass A immediately before or after the existing assess_ext pass
+  (Pass B) on the same workload. Same N, same core affinity (core 0).
+  Record both H vectors in execution_record.md. Do NOT mix passes in
+  a single uProf session — they must be separate sequential invocations.
+
+  Target variants (match assess_ext sessions):
+    chain-only 1X: probe.exe chain-only 524288
+    chain-only 2X: probe.exe chain-only 4194304
+    chain-only 4X: probe.exe chain-only 16777216   (OC-BR-1 context)
+    delta-R-stack: probe.exe chain-only-stack-spill 524288  (ΔR_stack, once implemented)
+
+  ADMISSIBILITY NOTE
+  ------------------
+  Results from this pass are declared observables through M only when
+  collected on the declared hardware (Ryzen 5 7600X, Windows 11).
+  Sandbox or VM results are structural checks only and are not admissible.
+  OC-HW-2 applies: uProf timing not comparable to benchmark.exe timing.
+-->
+
+<CoreConfig>
+
+  <!-- Anchor 1: Cycles. Required for PTI denominator consistency with assess_ext. -->
+  <Event>
+    <Name>ls_not_halted_cyc</Name>
+    <EventSelect>0x76</EventSelect>
+    <UnitMask>0x00</UnitMask>
+    <Description>Core cycles not in halt. Anchor — PTI denominator base.</Description>
+  </Event>
+
+  <!-- Anchor 2: Retired instructions. PTI = (event_count / retired_instr) * 1000 -->
+  <Event>
+    <Name>ex_ret_instr</Name>
+    <EventSelect>0xC0</EventSelect>
+    <UnitMask>0x00</UnitMask>
+    <Description>Retired instructions. PTI denominator. Matches assess_ext anchor.</Description>
+  </Event>
+
+  <!--
+    ls_stlf: Store-to-load forward hits.
+    Counts every iteration where the stack load (step 1: mov 40(%rsp) -> %rax)
+    is satisfied by forwarding from the prior iteration's store
+    (step 6: mov %rax -> 40(%rsp)) without a cache access.
+    Expected PTI if STLF always succeeds: ~1000/I_asm = 1000/9 ≈ 111.
+    If observed PTI < 111: STLF is failing on some fraction of iterations.
+    Fraction failing = (111 - observed_PTI) / 111.
+    PPR §2.1.15.4 PMCx035. No UnitMask required.
+  -->
+  <Event>
+    <Name>ls_stlf</Name>
+    <EventSelect>0x35</EventSelect>
+    <UnitMask>0x00</UnitMask>
+    <Description>
+      STLF hits. Stack load (step 1) forwarded from store (step 6).
+      Addresses OC-STLI-1 and OC-DC-1.
+      Declared load type: stack recurrence (40(%rsp) exact address match).
+    </Description>
+  </Event>
+
+  <!--
+    ls_bad_status2.stli_other: Non-forwardable store-to-load conflicts.
+    Counts iterations where the stack load could not be forwarded.
+    Together with ls_stlf: stlf_PTI + stli_other_PTI should approach
+    1000/I_asm = 111 PTI if every iteration has exactly one STLF attempt.
+    Residual (111 - stlf_PTI - stli_PTI) is unaccounted STLF-type load.
+    PPR §2.1.15.4 PMCx024 UMask=0x02.
+  -->
+  <Event>
+    <Name>ls_bad_status2.stli_other</Name>
+    <EventSelect>0x24</EventSelect>
+    <UnitMask>0x02</UnitMask>
+    <Description>
+      Non-forwardable store-to-load conflicts.
+      Complement of ls_stlf for the stack recurrence load.
+      Addresses OC-STLI-1: together with ls_stlf establishes STLF success rate.
+    </Description>
+  </Event>
+
+  <!--
+    ls_dmnd_fills_from_sys.dram_io_near: Demand fills from local DRAM.
+    Counts cache line fetches from DRAM for local NUMA node — the dominant
+    source for chain[] pointer chase loads (step 5) at large N where the
+    working set exceeds L3. At 2X (N=4194304): working set >> 32MB L3,
+    confirmed DRAM-resident from prior assess_ext results.
+    This is the load-type-specific refill counter that OC-DC-1 requires.
+    PPR §2.1.15.4 PMCx043 UMask=0x08.
+  -->
+  <Event>
+    <Name>ls_dmnd_fills_from_sys.dram_io_near</Name>
+    <EventSelect>0x43</EventSelect>
+    <UnitMask>0x08</UnitMask>
+    <Description>
+      Demand data cache fills from local DRAM/MMIO.
+      Declared load type: chain[] pointer chase (step 5), DRAM-resident at 2X.
+      Primary counter for OC-DC-1 resolution.
+    </Description>
+  </Event>
+
+  <!--
+    ls_dmnd_fills_from_sys.local_l2: Demand fills from local L2.
+    Included for completeness and to detect L2 residency at small N (1X).
+    At 1X (N=524288): working set ~4MB, partially L2/L3-resident.
+    At 2X: expected near-zero; confirms DRAM dominance at 2X.
+    PPR §2.1.15.4 PMCx043 UMask=0x01.
+  -->
+  <Event>
+    <Name>ls_dmnd_fills_from_sys.local_l2</Name>
+    <EventSelect>0x43</EventSelect>
+    <UnitMask>0x01</UnitMask>
+    <Description>
+      Demand data cache fills from local L2.
+      Fills at 1X (L2/L3-resident working set). Expected near-zero at 2X.
+      Completeness check for fill source accounting.
+    </Description>
+  </Event>
+
+</CoreConfig>
+
+<!--
+  DERIVED QUANTITIES (computed post-collection, declared in execution_record.md)
+
+  All PTI values = (event_count / ex_ret_instr) * 1000
+
+  STLF_PTI       = ls_stlf_count / retired_instr * 1000
+  STLI_PTI       = ls_bad_status2_count / retired_instr * 1000
+  DRAM_FILL_PTI  = ls_dmnd_fills_dram_near_count / retired_instr * 1000
+  L2_FILL_PTI    = ls_dmnd_fills_local_l2_count / retired_instr * 1000
+
+  STLF_RATE      = STLF_PTI / (1000/I_asm)   where I_asm = 9
+                 = STLF_PTI / 111.11
+                 Interpretation: fraction of iterations where STLF succeeds.
+                 Range: [0, 1]. If STLF_RATE < 1: STLF failing on (1 - STLF_RATE)
+                 fraction of iterations.
+
+  FILL_ACCOUNT   = DRAM_FILL_PTI + L2_FILL_PTI
+                 Compare against ls_dmnd_fills_from_sys.all PTI from Pass B.
+                 If FILL_ACCOUNT ≈ Pass_B_total_fill_PTI: fills accounted for.
+                 Residual = hardware prefetch or other fill source.
+
+  CHAIN_LOAD_PTI_DECLARED = DRAM_FILL_PTI  (at 2X, where DRAM dominates)
+                 This is the declared chain load refill rate.
+                 Admissible as CHAIN_FILL_PTI once FILL_ACCOUNT verified.
+-->
